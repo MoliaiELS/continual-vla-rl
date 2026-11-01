@@ -25,14 +25,14 @@ python tools/idac/gpu_smoke.py "$mode"
 case "$mode" in
     env) ;;
     config)
-        bash examples/embodiment/run_embodiment.sh fyp/spatial_smoke --cfg job --resolve > "$LOG_DIR/train.resolved.yaml"
-        bash examples/embodiment/eval_embodiment.sh fyp/spatial_eval --cfg job --resolve > "$LOG_DIR/eval.resolved.yaml"
+        bash examples/embodiment/run_embodiment.sh crl_experiment/fyp_spatial_smoke --cfg job --resolve > "$LOG_DIR/train.resolved.yaml"
+        bash examples/embodiment/eval_embodiment.sh crl_experiment/fyp_spatial_eval --cfg job --resolve > "$LOG_DIR/eval.resolved.yaml"
         ;;
     eval)
-        bash examples/embodiment/eval_embodiment.sh fyp/spatial_eval
+        bash examples/embodiment/eval_embodiment.sh crl_experiment/fyp_spatial_eval
         ;;
     train)
-        bash examples/embodiment/run_embodiment.sh fyp/spatial_smoke
+        bash examples/embodiment/run_embodiment.sh crl_experiment/fyp_spatial_smoke
         ;;
     *) echo "Unknown mode $mode" >&2; exit 2 ;;
 esac
