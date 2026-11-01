@@ -22,8 +22,10 @@ report = {
     "packages": {},
 }
 with contextlib.redirect_stdout(sys.stderr):
-    for name in ("torch", "torchvision", "transformers", "peft", "ray", "prismatic", "libero", "rlinf", "robosuite", "mujoco"):
+    for name in ("torch", "torchvision", "transformers", "peft", "ray", "prismatic", "libero", "rlinf", "robosuite", "mujoco", "tensorflow", "tensorflow_datasets", "dlimp", "tensorflow_graphics"):
         module = importlib.import_module(name)
+        if name == "tensorflow":
+            module.config.set_visible_devices([], "GPU")
         report["packages"][name] = {"version": getattr(module, "__version__", None), "path": str(module.__file__)}
 for name, fragment in {"transformers": "transformers-openvla-oft", "prismatic": "openvla-oft", "libero": "LIBERO", "rlinf": "rlinf"}.items():
     source = Path(report["packages"][name]["path"]).resolve()
