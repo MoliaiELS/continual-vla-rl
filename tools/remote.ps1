@@ -7,7 +7,7 @@ $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $root = Split-Path $PSScriptRoot -Parent
 $cfg = Import-PowerShellDataFile "$PSScriptRoot/idac/settings.psd1"
 function Invoke-Remote([string]$Script) {
-    $Script.Replace("`r",'') | & ssh -T -o BatchMode=yes -o ConnectTimeout=15 $cfg.SshHost bash -se
+    $Script.Replace("`r",'') | & ssh -T -o BatchMode=yes -o ConnectTimeout=15 $cfg.SshHost "tr -d '\r' | bash -se"
     if ($LASTEXITCODE -ne 0) { throw "Remote command failed: $LASTEXITCODE" }
 }
 function Get-Commit {
