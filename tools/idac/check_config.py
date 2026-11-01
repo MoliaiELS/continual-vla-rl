@@ -10,6 +10,7 @@ os.environ["EMBODIED_PATH"] = str(repo / "examples/embodiment")
 os.environ["REPO_PATH"] = str(repo)
 os.environ.setdefault("FYP_MODEL_PATH", "/not-downloaded")
 OmegaConf.register_new_resolver("int_div", lambda x, y: int(x) // int(y), replace=True)
+OmegaConf.register_new_resolver("multiply", lambda x, y: x * y, replace=True)
 with initialize_config_dir(config_dir=str(repo / "examples/embodiment/config/crl_experiment"), version_base="1.1"):
     for name in ("fyp_spatial_smoke", "fyp_spatial_eval"):
         cfg = compose(config_name=name)

@@ -3,6 +3,7 @@
 defaults:
   - env/train: libero_spatial
   - env/eval: libero_spatial
+  - _self_
   - override hydra/job_logging: stdout
 
 hydra:
