@@ -47,7 +47,7 @@ export TMPDIR=/mnt/slurmfs-4090node3/user_data/yguo704/RLinf/tmp
   python=3.11.10 pip -y
 ```
 
-安装将 Torch 固定到 2.6.0/cu124，避免浮动依赖引入新 CUDA / Transformers API。OpenVLA-OFT 的浮动 Git Transformers 不执行，明确安装仓库自带版本；其余依赖与固定 dlimp 单独安装。`pip check`、完整 freeze 和包来源报告为验收项；未安装 FlashAttention 不应宣称使用 FA2，需实测 backend。原始 requirements 保留，部署子集及版本见 `tools/idac/requirements.txt`。
+安装固定 Linux PyPI Torch 2.6.0，并断言 `torch.version.cuda == 12.4`，避免浮动依赖引入新 CUDA / Transformers API。官方 CUDA wheel CDN 在本次下载中明显较慢，使用已测速的清华 PyPI 镜像；临时解包在个人 `/tmp/fyp_install_<user>`，下载缓存仍在存储根。OpenVLA-OFT 的浮动 Git Transformers 不执行，明确安装仓库自带版本；其余依赖与固定 dlimp 单独安装。`pip check`、完整 freeze 和包来源报告为验收项；未安装 FlashAttention 不应宣称使用 FA2，需实测 backend。原始 requirements 保留，部署子集及版本见 `tools/idac/requirements.txt`。
 
 ## 服务器规范对方案的实际修订
 

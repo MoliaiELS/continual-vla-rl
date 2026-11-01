@@ -1,5 +1,5 @@
 # Deployment subset for LIBERO + discrete OpenVLA-OFT; no JAX/ManiSkill/SAPIEN.
-# Torch is installed from the explicit cu124 index by bootstrap.sh.
+# Linux PyPI Torch 2.6.0 ships CUDA 12.4; bootstrap asserts the runtime version.
 numpy==1.26.4
 scipy==1.16.0
 accelerate==1.10.1
