@@ -20,6 +20,7 @@ gym==0.25.2
 robosuite==1.4.1
 mujoco==3.3.7
 bddl==1.0.1
+future==1.0.0
 easydict==1.13
 einops==0.8.1
 datasets==4.0.0
