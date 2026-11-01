@@ -1,5 +1,5 @@
 param(
-    [Parameter(Position=0)][ValidateSet('doctor','sync','bootstrap','smoke','config','eval-smoke','train-smoke','status','logs')][string]$Command = 'doctor',
+    [Parameter(Position=0)][ValidateSet('doctor','sync','bootstrap','bootstrap-status','smoke','config','eval-smoke','train-smoke','status','logs')][string]$Command = 'doctor',
     [Parameter(Position=1)][string]$JobId
 )
 $ErrorActionPreference = 'Stop'
@@ -44,7 +44,7 @@ git -C '$code' fetch origin '$($cfg.Branch)'
 git -C '$code' cat-file -e '$sha^{commit}'
 if [ ! -d '$snapshot' ]; then
   mkdir -p '$($cfg.RunCodeRoot)'
-  git -C '$code' worktree add --detach '$snapshot' '$sha'
+  git -C '$code' worktree add --quiet --detach '$snapshot' '$sha'
 fi
 test "`$(git -C '$snapshot' rev-parse HEAD)" = '$sha'
 echo 'SYNC_OK $sha $snapshot'
@@ -54,6 +54,9 @@ echo 'SYNC_OK $sha $snapshot'
         $sha = Get-Commit
         $snapshot = "$($cfg.RunCodeRoot)/$sha"
         Invoke-Remote "test -f '$snapshot/tools/idac/bootstrap.sh'; nohup bash '$snapshot/tools/idac/bootstrap.sh' > '$data/reports/bootstrap.log' 2>&1 < /dev/null & echo BOOTSTRAP_PID=`$!"
+    }
+    'bootstrap-status' {
+        Invoke-Remote "if test -f '$data/reports/bootstrap.complete'; then echo BOOTSTRAP_COMPLETE; else echo BOOTSTRAP_NOT_COMPLETE; fi; tail -n 30 '$data/reports/bootstrap.log'"
     }
     { $_ -in 'smoke','config','eval-smoke','train-smoke' } {
         $sha = Get-Commit

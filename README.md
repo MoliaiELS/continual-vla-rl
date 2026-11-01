@@ -2,6 +2,8 @@
   Simple Recipe Works: Vision-Language-Action Models are Natural Continual Learners with Reinforcement Learning
 </h1>
 
+FYP IADC deployment workflow: [docs/deployment.md](docs/deployment.md).
+
 <p align="center">
   <a href="https://arxiv.org/abs/2603.11653"><img src="https://img.shields.io/badge/arXiv-Paper-red" alt="arXiv"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>

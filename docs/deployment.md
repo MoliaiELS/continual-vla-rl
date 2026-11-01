@@ -27,6 +27,7 @@
 # 修改完成后按实际文件 git add / git commit，再同步；拒绝未提交修改。
 ./tools/remote.ps1 sync
 ./tools/remote.ps1 bootstrap
+./tools/remote.ps1 bootstrap-status
 ./tools/remote.ps1 smoke          # CUDA + 作业独立 Ray + LIBERO/EGL，非策略评估
 ./tools/remote.ps1 config         # 额外导出训练/评估的 resolved config
 ./tools/remote.ps1 eval-smoke     # 模型下载完整后，2 条 SFT 回合
