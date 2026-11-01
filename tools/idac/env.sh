@@ -15,7 +15,7 @@ export NUMBA_CACHE_DIR="$FYP_DATA_ROOT/cache/numba"
 export MPLCONFIGDIR="$FYP_DATA_ROOT/cache/matplotlib"
 export LIBERO_REPO_PATH="$FYP_REPO/LIBERO"
 # Preserve this outside the source tree; launchers honor the explicit value.
-export LIBERO_CONFIG_PATH="$FYP_DATA_ROOT/config/libero"
+export LIBERO_CONFIG_PATH="$FYP_DATA_ROOT/config/libero/$(git -C "$FYP_REPO" rev-parse HEAD)"
 export REPO_PATH="$FYP_REPO"
 export EMBODIED_PATH="$FYP_REPO/examples/embodiment"
 export PYTHONPATH="$FYP_REPO:$FYP_REPO/transformers-openvla-oft/src:$FYP_REPO/openvla-oft:$FYP_REPO/LIBERO${PYTHONPATH:+:$PYTHONPATH}"
