@@ -20,10 +20,10 @@ export TMPDIR="/tmp/fyp_install_${USER}"
 mkdir -p "$TMPDIR"
 export PIP_INDEX_URL="${FYP_PIP_INDEX_URL:-https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple}"
 export PIP_NO_COMPILE=1
-python -m pip install 'pip==25.2' 'setuptools==75.8.0' wheel
-python -m pip install torch==2.6.0 torchvision==0.21.0 --find-links "$FYP_DATA_ROOT/cache/wheels"
+python -m pip install 'pip==25.2' 'setuptools==75.8.0' 'wheel==0.48.0'
+python -m pip install torch==2.6.0 torchvision==0.21.0 -c tools/idac/constraints.resolved.txt --find-links "$FYP_DATA_ROOT/cache/wheels"
 python -c 'import torch; assert torch.version.cuda == "12.4", torch.version.cuda'
-python -m pip install -r tools/idac/requirements.txt
+python -m pip install -r tools/idac/requirements.txt -c tools/idac/constraints.resolved.txt
 # Avoid openvla-oft's floating Git Transformers requirement replacing the vendor copy.
 python -m pip install --no-deps -e ./transformers-openvla-oft -e ./openvla-oft -e ./LIBERO
 python tools/idac/prepare.py
