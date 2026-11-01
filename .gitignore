@@ -17,6 +17,7 @@ logs*
 uv.lock
 model/
 .local/
+*.egg-info/
 LIBERO/config.local.yaml
 openvla_image.tar
 *.err

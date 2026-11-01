@@ -17,7 +17,7 @@ cluster:
   num_nodes: 1
   component_placement:
     actor,env,rollout: all
-  ray_object_store_memory: 461708984320  # Ray object store memory in bytes (default: ~430GB)
+  ray_object_store_memory: 2147483648  # FYP job.sh applies this explicitly at Ray init
 
 runner:
   task_type: embodied
