@@ -15,7 +15,10 @@ if [[ ! -x "$FYP_ENV_PREFIX/bin/python" ]]; then
 fi
 source "$(dirname "$0")/env.sh"
 cd "$FYP_REPO"
-export PIP_INDEX_URL=https://pypi.org/simple
+# Wheel extraction is temporary I/O, and must avoid slow NFS metadata operations.
+export TMPDIR="/tmp/fyp_install_${USER}"
+mkdir -p "$TMPDIR"
+export PIP_INDEX_URL="${FYP_PIP_INDEX_URL:-https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple}"
 export PIP_NO_COMPILE=1
 python -m pip install 'pip==25.2' 'setuptools==75.8.0' wheel
 python -m pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
