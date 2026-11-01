@@ -36,7 +36,7 @@ df -h /mnt/slurmfs-4090node1 /mnt/slurmfs-4090node3
         Invoke-Remote @"
 if [ ! -d '$code/.git' ]; then
   test ! -e '$code'
-  git clone --filter=blob:none --no-checkout --single-branch --branch '$($cfg.Branch)' '$($cfg.Repository)' '$code'
+  git clone --filter=blob:none --single-branch --branch '$($cfg.Branch)' '$($cfg.Repository)' '$code'
 fi
 git -C '$code' diff --quiet
 git -C '$code' diff --cached --quiet
