@@ -1,0 +1,31 @@
+defaults:
+  - /crl_experiment/libero_spatial_grpo_openvlaoft_spatial@_global_
+  - _self_
+
+runner:
+  max_epochs: 1
+  save_interval: 1
+  val_check_interval: -1
+  logger:
+    logger_backends: [tensorboard]
+algorithm:
+  num_group_envs: 1
+  group_size: 8
+  rollout_epoch: 1
+env:
+  fixed_task_ids: [0]
+  train:
+    video_cfg:
+      save_video: false
+  eval:
+    video_cfg:
+      save_video: false
+actor:
+  micro_batch_size: 1
+  global_batch_size: 64
+  checkpoint_load_path: ${oc.env:FYP_MODEL_PATH}
+  tokenizer:
+    tokenizer_model: ${oc.env:FYP_MODEL_PATH}
+rollout:
+  model_dir: ${oc.env:FYP_MODEL_PATH}
+  pipeline_stage_num: 1

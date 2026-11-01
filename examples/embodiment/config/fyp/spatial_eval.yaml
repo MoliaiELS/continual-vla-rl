@@ -1,0 +1,24 @@
+defaults:
+  - /crl_experiment/libero_spatial_grpo_openvlaoft_eval_spatial@_global_
+  - _self_
+
+runner:
+  logger:
+    logger_backends: [tensorboard]
+algorithm:
+  eval_rollout_epoch: 1
+env:
+  fixed_task_ids: [0]
+  eval:
+    num_envs: 2
+    eval_per_task: 2
+    video_cfg:
+      save_video: true
+actor:
+  checkpoint_load_path: ${oc.env:FYP_MODEL_PATH}
+  model:
+    is_lora: false
+  tokenizer:
+    tokenizer_model: ${oc.env:FYP_MODEL_PATH}
+rollout:
+  model_dir: ${oc.env:FYP_MODEL_PATH}

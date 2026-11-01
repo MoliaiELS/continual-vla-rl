@@ -16,6 +16,8 @@ logs*
 .venv
 uv.lock
 model/
+.local/
+LIBERO/config.local.yaml
 openvla_image.tar
 *.err
 .ray_tmp*

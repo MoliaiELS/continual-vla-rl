@@ -1,4 +1,5 @@
 #! /bin/bash
+set -euo pipefail
 #
 # Setup script for running embodied agent evaluation
 #
@@ -17,19 +18,19 @@ export PYOPENGL_PLATFORM="egl"
 # export MUJOCO_GL="osmesa"
 # export PYOPENGL_PLATFORM="osmesa"
 
-export PYTHONPATH=${REPO_PATH}:$PYTHONPATH
+export PYTHONPATH=${REPO_PATH}:${PYTHONPATH:-}
 # NOTE: set LIBERO_REPO_PATH to the path of the LIBERO repo
 # Defaults to ${REPO_PATH}/LIBERO if not set
 export LIBERO_REPO_PATH="${LIBERO_REPO_PATH:-${REPO_PATH}/LIBERO}"
 # NOTE: set LIBERO_CONFIG_PATH for libero/libero/__init__.py
-export LIBERO_CONFIG_PATH=${LIBERO_REPO_PATH}
+export LIBERO_CONFIG_PATH=${LIBERO_CONFIG_PATH:-${LIBERO_REPO_PATH}}
 
 export PYTHONPATH=${LIBERO_REPO_PATH}:$PYTHONPATH
 export CUDA_LAUNCH_BLOCKING=1
 export HYDRA_FULL_ERROR=1
 
 
-if [ -z "$1" ]; then
+if [ -z "${1:-}" ]; then
     CONFIG_NAME="maniskill_ppo_openvlaoft"
     CONFIG_PATH="${EMBODIED_PATH}/config/"
 else
@@ -160,7 +161,7 @@ TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 STEP_NUMBER=""
 if [[ "${LORA_PATH}" =~ global_step_([0-9]+) ]]; then
     STEP_NUMBER="${BASH_REMATCH[1]}"
-elif [ -n "${EVAL_STEP_NUMBER}" ]; then
+elif [ -n "${EVAL_STEP_NUMBER:-}" ]; then
     STEP_NUMBER="${EVAL_STEP_NUMBER}"
 fi
 
@@ -173,15 +174,16 @@ fi
 
 # Include step number in log directory name if available
 if [ -n "${STEP_NUMBER}" ]; then
-    LOG_DIR="${LOGS_BASE}/${LOG_SUBDIR}_step_${STEP_NUMBER}_${TIMESTAMP}"
+    LOG_DIR="${LOG_DIR:-${LOGS_BASE}/${LOG_SUBDIR}_step_${STEP_NUMBER}_${TIMESTAMP}}"
 else
-    LOG_DIR="${LOGS_BASE}/${LOG_SUBDIR}_${TIMESTAMP}"
+    LOG_DIR="${LOG_DIR:-${LOGS_BASE}/${LOG_SUBDIR}_${TIMESTAMP}}"
 fi
 
 MEGA_LOG_FILE="${LOG_DIR}/eval_embodiment.log"
 mkdir -p "${LOG_DIR}"
-CMD="python ${SRC_FILE} --config-path ${CONFIG_PATH} --config-name ${CONFIG_NAME} runner.logger.log_path=${LOG_DIR} ${HYDRA_OVERRIDES}"
-echo ${CMD}
-${CMD} 2>&1 | tee ${MEGA_LOG_FILE}
+CMD=(python "${SRC_FILE}" --config-path "${CONFIG_PATH}" --config-name "${CONFIG_NAME}" "runner.logger.log_path=${LOG_DIR}" "$@")
+printf '%q ' "${CMD[@]}" > "${MEGA_LOG_FILE}"
+printf '\n' >> "${MEGA_LOG_FILE}"
+"${CMD[@]}" 2>&1 | tee -a "${MEGA_LOG_FILE}"
 # Force flush stdout to ensure output appears even if called from parent script
 exec >&1

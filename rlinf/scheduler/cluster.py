@@ -149,13 +149,35 @@ class Cluster:
 
         try:
             # First try to connect to an existing Ray cluster
-            ray.init(
-                address="auto",
-                logging_level=Cluster.LOGGING_LEVEL,
-                namespace=Cluster.NAMESPACE,
-                runtime_env={"env_vars": dict(os.environ)},
-            )
+            if os.environ.get("FYP_RAY_ISOLATED") == "1":
+                # Single-node Slurm jobs must not attach to another user's Ray.
+                assert self._num_nodes == 1, "FYP isolation currently supports one node"
+                import json
+
+                ray.init(
+                    address="local",
+                    num_cpus=int(os.environ["SLURM_CPUS_PER_TASK"]),
+                    num_gpus=int(os.environ.get("FYP_NUM_GPUS", "1")),
+                    object_store_memory=int(os.environ["FYP_RAY_OBJECT_STORE_BYTES"]),
+                    include_dashboard=False,
+                    namespace=Cluster.NAMESPACE,
+                    logging_level=Cluster.LOGGING_LEVEL,
+                    runtime_env={"env_vars": dict(os.environ)},
+                    _system_config={"object_spilling_config": json.dumps({
+                        "type": "filesystem",
+                        "params": {"directory_path": os.environ["FYP_RAY_SPILL_DIR"]},
+                    })},
+                )
+            else:
+                ray.init(
+                    address="auto",
+                    logging_level=Cluster.LOGGING_LEVEL,
+                    namespace=Cluster.NAMESPACE,
+                    runtime_env={"env_vars": dict(os.environ)},
+                )
         except (ConnectionError, PermissionError, OSError, ValueError):
+            if os.environ.get("FYP_RAY_ISOLATED") == "1":
+                raise
             ray.init(
                 logging_level=Cluster.LOGGING_LEVEL,
                 namespace=Cluster.NAMESPACE,
