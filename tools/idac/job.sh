@@ -2,7 +2,8 @@
 set -euo pipefail
 : "${SLURM_JOB_ID:?Submit through tools/remote.ps1}"
 [[ "$(hostname)" != 4090node1 ]] || { echo 'Login-node execution refused'; exit 1; }
-source "$(dirname "$0")/env.sh"
+# Slurm copies this script into its spool directory, so $0 is not the checkout.
+source "${FYP_JOB_REPO:?Missing submitted commit directory}/tools/idac/env.sh"
 mode="${1:-env}"
 export LOG_DIR="$FYP_DATA_ROOT/runs/${mode}_${SLURM_JOB_ID}"
 mkdir -p "$LOG_DIR"

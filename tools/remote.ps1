@@ -67,7 +67,8 @@ echo 'SYNC_OK $sha $snapshot'
         Invoke-Remote @"
 test -f '$snapshot/tools/idac/job.sh'
 mkdir -p '$data/logs'
-sbatch --parsable --partition='$($cfg.Partition)' $nodeArg --exclude=4090node1 --nodes=1 --ntasks=1 --gres='$($cfg.Gres)' --cpus-per-task=$($cfg.Cpus) --time=00:30:00 --job-name='fyp-$mode' --output='$data/logs/%j.out' --error='$data/logs/%j.err' '$snapshot/tools/idac/job.sh' '$mode'
+export FYP_JOB_REPO='$snapshot'
+sbatch --parsable --chdir='$snapshot' --partition='$($cfg.Partition)' $nodeArg --exclude=4090node1 --nodes=1 --ntasks=1 --gres='$($cfg.Gres)' --cpus-per-task=$($cfg.Cpus) --time=00:30:00 --job-name='fyp-$mode' --output='$data/logs/%j.out' --error='$data/logs/%j.err' '$snapshot/tools/idac/job.sh' '$mode'
 "@
     }
     { $_ -in 'status','logs' } {
