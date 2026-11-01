@@ -91,6 +91,10 @@ class Accelerator:
             Dict[str, str]: A dictionary containing the accelerator environment variables.
         """
         env_vars = {}
+        if accelerator_type == AcceleratorType.NV_GPU and os.environ.get("FYP_RAY_ISOLATED") == "1":
+            allocated = os.environ["FYP_ALLOCATED_CUDA_DEVICES"].split(",")
+            # Placement IDs are logical within the allocation, not physical node IDs.
+            visible_accelerators = [allocated[int(v)] for v in visible_accelerators]
         visible_accelerators = ",".join(visible_accelerators)
         if accelerator_type == AcceleratorType.NV_GPU:
             # All the three types of GPU can be set together
@@ -155,6 +159,9 @@ class Accelerator:
         if visible_devices is None or visible_devices == "":
             return []
         else:
+            if accelerator_type == AcceleratorType.NV_GPU and os.environ.get("FYP_RAY_ISOLATED") == "1":
+                allocated = os.environ["FYP_ALLOCATED_CUDA_DEVICES"].split(",")
+                return [allocated.index(v.strip()) for v in visible_devices.split(",")]
             try:
                 visible_devices = [int(v.strip()) for v in visible_devices.split(",")]
             except ValueError:
