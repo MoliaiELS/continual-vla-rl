@@ -11,7 +11,7 @@
 | 远端 Git 管理目录 | `/mnt/slurmfs-4090node1/homes/yguo704/RLinf` |
 | 固定运行代码 | `/mnt/slurmfs-4090node1/homes/yguo704/RLinf-runs/<commit>` |
 | 大文件根目录 | `/mnt/slurmfs-4090node3/user_data/yguo704/RLinf` |
-| 独立 Conda prefix | `<大文件根>/envs/vla_budget_rl`，Python 3.11.10 |
+| 独立 Conda prefix | `/mnt/slurmfs-4090node1/homes/yguo704/miniforge3/envs/vla_budget_rl`，Python 3.11.10 |
 | 模型 | `<大文件根>/models/Openvla-oft-SFT-libero-spatial-traj1` |
 | 作业输出 | `<大文件根>/logs/<job>.out`、`.err` |
 | 运行证据 | `<大文件根>/runs/<mode>_<job>/` |
@@ -39,10 +39,10 @@
 bootstrap 为安装工作，日志位于 `reports/bootstrap.log`，使用 flock 防止并发安装。环境创建命令：
 
 ```bash
-export CONDA_PKGS_DIRS=/mnt/slurmfs-4090node3/user_data/yguo704/RLinf/cache/conda
+export CONDA_PKGS_DIRS=/mnt/slurmfs-4090node1/homes/yguo704/miniforge3/pkgs-vla-budget
 export TMPDIR=/mnt/slurmfs-4090node3/user_data/yguo704/RLinf/tmp
 /mnt/slurmfs-4090node1/homes/yguo704/miniforge3/bin/conda create \
-  --prefix /mnt/slurmfs-4090node3/user_data/yguo704/RLinf/envs/vla_budget_rl \
+  --prefix /mnt/slurmfs-4090node1/homes/yguo704/miniforge3/envs/vla_budget_rl \
   --override-channels -c https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main \
   python=3.11.10 pip -y
 ```
@@ -53,7 +53,7 @@ export TMPDIR=/mnt/slurmfs-4090node3/user_data/yguo704/RLinf/tmp
 
 依据用户指定的 `IADC server for USER.docx`。代码只能放个人 homes；大文件转到存储节点。登录节点用于安装与调试；超过 30 分钟的 GPU 任务会被清理，所有本项目 GPU 检查也统一走 sbatch。只管理自己的文件和明确 job ID，不安装代理、不改驱动、不用全节点 `ray stop`。
 
-- 2026-11-01 登录盘约剩 47GB，存储节点约剩 4.3TB：环境与缓存也迁入项目存储根，不占新的登录盘大空间。
+- 2026-11-01 登录盘约剩 47GB，存储节点约剩 4.3TB。初试 Conda 放存储盘，但 NFS 小文件解包约 8 分钟仍未完成 Python 基础包；因此独立 Conda 改放个人 homes 的本地盘，控制安装体积，pip 下载缓存、模型和结果仍放存储根。Conda 小缓存为 `miniforge3/pkgs-vla-budget`，已下载的基础包直接复用。
 - 可见 Slurm 分区为 `GPU`，3090/4090；A100 是单独申请的渲染资源，不在本账号 Slurm 分区。先用 `4090node2` 的 1 张 4090 验证，单卡 GRPO 显存可行性仍须 profile。
 - 节点 `RealMemory=1`、`SelectTypeParameters=CR_CORE`：`--mem=64G` 会导致不可调度，因此暂不声明内存请求。作业记录物理 RAM 与可用 RAM；这不构成 64GB 内存预留或 cgroup 限额，需管理员修正后才能可靠预约。不得使用 `--mem=0` 独占节点。
 - 保留 Slurm 的 CUDA_VISIBLE_DEVICES，Ray 只登记 1 GPU、8 CPU、2GiB object store，溢写到本次结果目录；独立 `/tmp/fyp_<user>_<job>` 与 `address=local`，不附着已有共享 Ray。2GiB 是工程起点，不是训练已验证最小值。

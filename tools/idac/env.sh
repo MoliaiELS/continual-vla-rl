@@ -3,8 +3,8 @@
 export FYP_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export FYP_DATA_ROOT="${FYP_DATA_ROOT:-/mnt/slurmfs-4090node3/user_data/yguo704/RLinf}"
 export FYP_CONDA_ROOT="${FYP_CONDA_ROOT:-/mnt/slurmfs-4090node1/homes/yguo704/miniforge3}"
-export FYP_ENV_PREFIX="$FYP_DATA_ROOT/envs/vla_budget_rl"
-export CONDA_PKGS_DIRS="$FYP_DATA_ROOT/cache/conda"
+export FYP_ENV_PREFIX="${FYP_ENV_PREFIX:-$FYP_CONDA_ROOT/envs/vla_budget_rl}"
+export CONDA_PKGS_DIRS="$FYP_CONDA_ROOT/pkgs-vla-budget"
 export PIP_CACHE_DIR="$FYP_DATA_ROOT/cache/pip"
 export HF_HOME="$FYP_DATA_ROOT/cache/huggingface"
 export HF_HUB_DISABLE_TELEMETRY=1

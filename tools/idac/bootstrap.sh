@@ -3,18 +3,20 @@ set -euo pipefail
 # Create an independent prefix when bootstrapping a fresh account.
 FYP_DATA_ROOT="${FYP_DATA_ROOT:-/mnt/slurmfs-4090node3/user_data/yguo704/RLinf}"
 FYP_CONDA_ROOT="${FYP_CONDA_ROOT:-/mnt/slurmfs-4090node1/homes/yguo704/miniforge3}"
+FYP_ENV_PREFIX="${FYP_ENV_PREFIX:-$FYP_CONDA_ROOT/envs/vla_budget_rl}"
 mkdir -p "$FYP_DATA_ROOT"/{envs,cache/conda,reports,tmp}
 exec 9>"$FYP_DATA_ROOT/bootstrap.lock"
 flock -n 9 || { echo 'Another bootstrap is running'; exit 1; }
-if [[ ! -x "$FYP_DATA_ROOT/envs/vla_budget_rl/bin/python" ]]; then
-    CONDA_PKGS_DIRS="$FYP_DATA_ROOT/cache/conda" TMPDIR="$FYP_DATA_ROOT/tmp" \
-        "$FYP_CONDA_ROOT/bin/conda" create --prefix "$FYP_DATA_ROOT/envs/vla_budget_rl" \
+if [[ ! -x "$FYP_ENV_PREFIX/bin/python" ]]; then
+    CONDA_PKGS_DIRS="$FYP_CONDA_ROOT/pkgs-vla-budget" TMPDIR="$FYP_DATA_ROOT/tmp" \
+        "$FYP_CONDA_ROOT/bin/conda" create --prefix "$FYP_ENV_PREFIX" \
         --override-channels -c https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main \
         python=3.11.10 pip -y
 fi
 source "$(dirname "$0")/env.sh"
 cd "$FYP_REPO"
 export PIP_INDEX_URL=https://pypi.org/simple
+export PIP_NO_COMPILE=1
 python -m pip install 'pip==25.2' 'setuptools==75.8.0' wheel
 python -m pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
 python -m pip install -r tools/idac/requirements.txt
