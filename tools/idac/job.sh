@@ -29,8 +29,9 @@ python tools/idac/gpu_smoke.py "$mode"
 case "$mode" in
     env) ;;
     config)
-        bash examples/embodiment/run_embodiment.sh crl_experiment/fyp_spatial_smoke --cfg job --resolve > "$LOG_DIR/train.resolved.yaml"
-        bash examples/embodiment/eval_embodiment.sh crl_experiment/fyp_spatial_eval --cfg job --resolve > "$LOG_DIR/eval.resolved.yaml"
+        bash examples/embodiment/run_embodiment.sh crl_experiment/fyp_spatial_smoke --cfg job --resolve > "$LOG_DIR/train.launcher.txt"
+        bash examples/embodiment/eval_embodiment.sh crl_experiment/fyp_spatial_eval --cfg job --resolve > "$LOG_DIR/eval.launcher.txt"
+        python tools/idac/check_config.py
         ;;
     eval)
         bash examples/embodiment/eval_embodiment.sh crl_experiment/fyp_spatial_eval

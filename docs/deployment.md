@@ -47,7 +47,7 @@ export TMPDIR=/mnt/slurmfs-4090node3/user_data/yguo704/RLinf/tmp
   python=3.11.10 pip -y
 ```
 
-安装固定 Linux PyPI Torch 2.6.0，并断言 `torch.version.cuda == 12.4`，避免浮动依赖引入新 CUDA / Transformers API。官方 CUDA wheel CDN 在本次下载中明显较慢，使用已测速的清华 PyPI 镜像；临时解包在个人 `/tmp/fyp_install_<user>`，下载缓存仍在存储根。OpenVLA-OFT 的浮动 Git Transformers 不执行，明确安装仓库自带版本；其余依赖与固定 dlimp 单独安装。`pip check`、完整 freeze 和包来源报告为验收项；未安装 FlashAttention 不应宣称使用 FA2，需实测 backend。原始 requirements 保留，部署子集及版本见 `tools/idac/requirements.txt`。
+安装固定 Linux PyPI Torch 2.6.0，并断言 `torch.version.cuda == 12.4`，避免浮动依赖引入新 CUDA / Transformers API。官方 CUDA wheel CDN 在本次下载中明显较慢，使用已测速的清华 PyPI 镜像；临时解包在个人 `/tmp/fyp_install_<user>`，下载缓存仍在存储根。OpenVLA-OFT 的浮动 Git Transformers 不执行，明确安装仓库自带版本；其余依赖与固定 dlimp 统一解析。`pip check`、完整 freeze 和包来源报告为验收项；未安装 FlashAttention 不应宣称使用 FA2，需实测 backend。原始 requirements 保留，部署子集及版本见 `tools/idac/requirements.txt`。
 
 依赖审查还发现两项实际约束：固定 dlimp 要求 TensorFlow **2.15.0**；TensorFlow Addons 0.23 要求 typeguard `<3`，而 Tyro 0.9.31 要求 `>=4`。本 LIBERO/GRPO 路径未引用 Tyro，因此部署子集不安装它，保留 TF Graphics/Addons 所需的 typeguard 2.13.3。不要把原始浮动 requirements 直接当成可复现 lockfile。
 
@@ -56,7 +56,7 @@ export TMPDIR=/mnt/slurmfs-4090node3/user_data/yguo704/RLinf/tmp
 依据用户指定的 `IADC server for USER.docx`。代码只能放个人 homes；大文件转到存储节点。登录节点用于安装与调试；超过 30 分钟的 GPU 任务会被清理，所有本项目 GPU 检查也统一走 sbatch。只管理自己的文件和明确 job ID，不安装代理、不改驱动、不用全节点 `ray stop`。
 
 - 2026-11-01 登录盘约剩 47GB，存储节点约剩 4.3TB。初试 Conda 放存储盘，但 NFS 小文件解包约 8 分钟仍未完成 Python 基础包；因此独立 Conda 改放个人 homes 的本地盘，控制安装体积，pip 下载缓存、模型和结果仍放存储根。Conda 小缓存为 `miniforge3/pkgs-vla-budget`，已下载的基础包直接复用。
-- 可见 Slurm 分区为 `GPU`，3090/4090；A100 是单独申请的渲染资源，不在本账号 Slurm 分区。先用 `4090node2` 的 1 张 4090 验证，单卡 GRPO 显存可行性仍须 profile。
+- 可见 Slurm 分区为 `GPU`，3090/4090；A100 是单独申请的渲染资源，不在本账号 Slurm 分区。默认请求 1 张 4090、排除登录节点，让 Slurm 选择空闲的计算节点；需要时可在 settings.psd1 固定 Node。本次在 4090node3 完成环境验证，单卡 GRPO 显存可行性仍须 profile。
 - 节点 `RealMemory=1`、`SelectTypeParameters=CR_CORE`：`--mem=64G` 会导致不可调度，因此暂不声明内存请求。作业记录物理 RAM 与可用 RAM；这不构成 64GB 内存预留或 cgroup 限额，需管理员修正后才能可靠预约。不得使用 `--mem=0` 独占节点。
 - 保留 Slurm 的 CUDA_VISIBLE_DEVICES，Ray 只登记 1 GPU、8 CPU、2GiB object store，溢写到本次结果目录；独立 `/tmp/fyp_<user>_<job>` 与 `address=local`，不附着已有共享 Ray。2GiB 是工程起点，不是训练已验证最小值。
 - HF 主站当前连接被 reset；先核对合法镜像，不安装代理。模型下载必须固定 snapshot revision 并核对文件，不能把空目录算下载完成。

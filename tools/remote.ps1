@@ -57,7 +57,7 @@ echo 'SYNC_OK $sha $snapshot'
         Invoke-Remote "test -f '$snapshot/tools/idac/bootstrap.sh'; nohup bash '$snapshot/tools/idac/bootstrap.sh' > '$data/reports/bootstrap.log' 2>&1 < /dev/null & echo BOOTSTRAP_PID=`$!"
     }
     'bootstrap-status' {
-        Invoke-Remote "if test -f '$data/reports/bootstrap.complete'; then echo BOOTSTRAP_COMPLETE; else echo BOOTSTRAP_NOT_COMPLETE; fi; tail -n 30 '$data/reports/bootstrap.log'"
+        Invoke-Remote "if test -f '$data/reports/bootstrap.complete'; then echo BOOTSTRAP_COMPLETE; echo 'Identity: $data/reports/environment.identity.json'; echo 'Dependencies: $data/reports/requirements.resolved.txt'; else echo BOOTSTRAP_NOT_COMPLETE; tail -n 30 '$data/reports/bootstrap.log'; fi"
     }
     { $_ -in 'smoke','config','eval-smoke','train-smoke' } {
         $sha = Get-Commit
