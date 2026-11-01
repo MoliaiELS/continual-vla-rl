@@ -1,5 +1,6 @@
 # Deployment subset for LIBERO + discrete OpenVLA-OFT; no JAX/ManiSkill/SAPIEN.
 # Linux PyPI Torch 2.6.0 ships CUDA 12.4; bootstrap asserts the runtime version.
+-e ./transformers-openvla-oft
 numpy==1.26.4
 scipy==1.16.0
 accelerate==1.10.1
@@ -11,6 +12,7 @@ diffusers==0.30.3
 draccus==0.8.0
 sentencepiece==0.1.99
 ray[default]==2.49.0
+opentelemetry-proto==1.27.0
 hydra-core==1.3.2
 omegaconf==2.3.0
 gymnasium==0.29.1
@@ -27,6 +29,8 @@ tensorflow==2.15.0
 tensorflow-probability==0.23.0
 tensorflow-graphics==2021.12.3
 tensorflow-datasets==4.9.3
+tensorflow-metadata==1.15.0
+protobuf==4.25.8
 tensorboard==2.15.2
 wandb==0.21.1
 imageio==2.37.0
