@@ -13,7 +13,7 @@ import psutil
 
 report = {
     "python": platform.python_version(),
-    "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+    "commit": subprocess.check_output(["git", "-C", os.environ["FYP_REPO"], "rev-parse", "HEAD"], text=True).strip(),
     "repo": os.environ["FYP_REPO"],
     "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
     "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),

@@ -63,10 +63,11 @@ echo 'SYNC_OK $sha $snapshot'
         $sha = Get-Commit
         $snapshot = "$($cfg.RunCodeRoot)/$sha"
         $mode = @{'smoke'='env';'config'='config';'eval-smoke'='eval';'train-smoke'='train'}[$Command]
+        $nodeArg = if ($cfg.Node) { "--nodelist='$($cfg.Node)'" } else { '' }
         Invoke-Remote @"
 test -f '$snapshot/tools/idac/job.sh'
 mkdir -p '$data/logs'
-sbatch --parsable --partition='$($cfg.Partition)' --nodelist='$($cfg.Node)' --exclude=4090node1 --nodes=1 --ntasks=1 --gres='$($cfg.Gres)' --cpus-per-task=$($cfg.Cpus) --time=00:30:00 --job-name='fyp-$mode' --output='$data/logs/%j.out' --error='$data/logs/%j.err' '$snapshot/tools/idac/job.sh' '$mode'
+sbatch --parsable --partition='$($cfg.Partition)' $nodeArg --exclude=4090node1 --nodes=1 --ntasks=1 --gres='$($cfg.Gres)' --cpus-per-task=$($cfg.Cpus) --time=00:30:00 --job-name='fyp-$mode' --output='$data/logs/%j.out' --error='$data/logs/%j.err' '$snapshot/tools/idac/job.sh' '$mode'
 "@
     }
     { $_ -in 'status','logs' } {
