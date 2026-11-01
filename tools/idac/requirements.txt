@@ -36,7 +36,9 @@ matplotlib==3.10.6
 rich==14.1.0
 tqdm==4.67.1
 pydantic==2.11.7
-tyro==0.9.31
+# Tyro is unused by this LIBERO/GRPO path and conflicts with TF Addons typeguard.
+tensorflow-addons==0.23.0
+typeguard==2.13.3
 safetensors==0.6.2
 json-numpy==2.1.1
 jsonlines==4.0.0

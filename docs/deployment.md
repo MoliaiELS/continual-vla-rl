@@ -49,6 +49,8 @@ export TMPDIR=/mnt/slurmfs-4090node3/user_data/yguo704/RLinf/tmp
 
 安装固定 Linux PyPI Torch 2.6.0，并断言 `torch.version.cuda == 12.4`，避免浮动依赖引入新 CUDA / Transformers API。官方 CUDA wheel CDN 在本次下载中明显较慢，使用已测速的清华 PyPI 镜像；临时解包在个人 `/tmp/fyp_install_<user>`，下载缓存仍在存储根。OpenVLA-OFT 的浮动 Git Transformers 不执行，明确安装仓库自带版本；其余依赖与固定 dlimp 单独安装。`pip check`、完整 freeze 和包来源报告为验收项；未安装 FlashAttention 不应宣称使用 FA2，需实测 backend。原始 requirements 保留，部署子集及版本见 `tools/idac/requirements.txt`。
 
+依赖审查还发现两项实际约束：固定 dlimp 要求 TensorFlow **2.15.0**；TensorFlow Addons 0.23 要求 typeguard `<3`，而 Tyro 0.9.31 要求 `>=4`。本 LIBERO/GRPO 路径未引用 Tyro，因此部署子集不安装它，保留 TF Graphics/Addons 所需的 typeguard 2.13.3。不要把原始浮动 requirements 直接当成可复现 lockfile。
+
 ## 服务器规范对方案的实际修订
 
 依据用户指定的 `IADC server for USER.docx`。代码只能放个人 homes；大文件转到存储节点。登录节点用于安装与调试；超过 30 分钟的 GPU 任务会被清理，所有本项目 GPU 检查也统一走 sbatch。只管理自己的文件和明确 job ID，不安装代理、不改驱动、不用全节点 `ray stop`。
