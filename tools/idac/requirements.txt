@@ -23,7 +23,7 @@ einops==0.8.1
 datasets==4.0.0
 pyarrow==21.0.0
 h5py==3.14.0
-tensorflow==2.15.1
+tensorflow==2.15.0
 tensorflow-probability==0.23.0
 tensorflow-graphics==2021.12.3
 tensorflow-datasets==4.9.3
@@ -45,3 +45,4 @@ fastapi==0.116.1
 psutil==7.0.0
 ninja==1.13.0
 packaging==24.2
+dlimp @ git+https://github.com/moojink/dlimp_openvla.git@040105d256bd28866cc6620621a3d5f7b6b91b46
