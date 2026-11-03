@@ -1,5 +1,5 @@
 param(
-    [Parameter(Position=0)][ValidateSet('doctor','sync','bootstrap','bootstrap-status','model-download','model-status','smoke','config','eval-smoke','train-smoke','status','logs')][string]$Command = 'doctor',
+    [Parameter(Position=0)][ValidateSet('doctor','sync','bootstrap','bootstrap-status','model-download','model-status','rollout','rollout-status','smoke','config','eval-smoke','train-smoke','status','logs')][string]$Command = 'doctor',
     [Parameter(Position=1)][string]$JobId
 )
 $ErrorActionPreference = 'Stop'
@@ -74,6 +74,29 @@ echo MODEL_DOWNLOAD_PID=`$!
         Invoke-Remote @"
 if test -f '$data/reports/model.snapshot.json'; then cat '$data/reports/model.snapshot.json'; fi
 if test -f '$data/reports/model-download.log'; then tail -c 4000 '$data/reports/model-download.log'; fi
+"@
+    }
+    'rollout' {
+        $sha = Get-Commit
+        $snapshot = "$($cfg.RunCodeRoot)/$sha"
+        Invoke-Remote @"
+test -f '$snapshot/tools/idac/rollout_when_ready.sh'
+export FYP_PARTITION='$($cfg.Partition)' FYP_GRES='$($cfg.Gres)' FYP_CPUS='$($cfg.Cpus)'
+nohup bash '$snapshot/tools/idac/rollout_when_ready.sh' '$snapshot' > '$data/reports/rollout-launch.log' 2>&1 < /dev/null &
+echo ROLLOUT_LAUNCHER_PID=`$!
+"@
+    }
+    'rollout-status' {
+        Invoke-Remote @"
+for suffix in state job-id exit-code; do
+  if test -f '$data/reports/rollout-launch.'`"`$suffix`"; then printf '%s: ' `"`$suffix`"; cat '$data/reports/rollout-launch.'`"`$suffix`"; fi
+done
+tail -n 12 '$data/reports/rollout-launch.log'
+if test -s '$data/reports/rollout-launch.job-id'; then
+  job_id=`$(cat '$data/reports/rollout-launch.job-id')
+  squeue -j `"`$job_id`" -h -o '%i %j %T %R'
+  sacct -j `"`$job_id`" --format=JobID,State,ExitCode,Elapsed -P
+fi
 "@
     }
     { $_ -in 'smoke','config','eval-smoke','train-smoke' } {

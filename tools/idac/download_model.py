@@ -32,7 +32,7 @@ def main():
     total = sum(f["size"] or 0 for f in files)
     print(f"Downloading fixed snapshot {repo}@{revision}: {total} bytes", flush=True)
     snapshot_download(repo_id=repo, revision=revision, local_dir=dest,
-                      endpoint=endpoint, max_workers=2)
+                      endpoint=endpoint, max_workers=4)
     for entry in files:
         path = dest / entry["name"]
         assert path.is_file(), f"Missing {path}"

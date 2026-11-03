@@ -49,7 +49,10 @@ case "$mode" in
         python tools/idac/check_config.py
         ;;
     eval)
+        export FYP_DEPLOYMENT_EVIDENCE="$LOG_DIR/evidence"
+        bash examples/embodiment/eval_embodiment.sh crl_experiment/fyp_spatial_eval --cfg job --resolve > "$LOG_DIR/eval.resolved.yaml"
         bash examples/embodiment/eval_embodiment.sh crl_experiment/fyp_spatial_eval
+        python tools/idac/verify_sft_rollout.py
         ;;
     train)
         bash examples/embodiment/run_embodiment.sh crl_experiment/fyp_spatial_smoke

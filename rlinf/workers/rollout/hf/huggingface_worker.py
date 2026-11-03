@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import gc
+import json
 import os
 from collections import defaultdict
 
@@ -125,11 +126,33 @@ class MultiStepRolloutWorker(Worker):
                 )
 
     def init_worker(self):
+        if os.environ.get("FYP_DEPLOYMENT_EVIDENCE"):
+            torch.manual_seed(self.cfg.actor.seed + self._rank)
+            np.random.seed(self.cfg.actor.seed + self._rank)
         self.hf_model = get_model(self.cfg.rollout.model_dir, self.cfg.actor.model)
         self.hf_model.setup_params(self.model_config, self.cfg)
         self.hf_model.to(self.precision)
         self.hf_model.eval()
         self.setup_sample_params()
+        if os.environ.get("FYP_DEPLOYMENT_EVIDENCE"):
+            from pathlib import Path
+            report = {
+                "model_class": type(self.hf_model).__name__,
+                "model_path": self.cfg.rollout.model_dir,
+                "seed": self.cfg.actor.seed + self._rank,
+                "dtype": str(next(self.hf_model.parameters()).dtype),
+                "parameter_count": sum(p.numel() for p in self.hf_model.parameters()),
+                "is_lora": self.cfg.actor.model.is_lora,
+                "sampling_params": self._sampling_params,
+                "language_attention_backend": self.hf_model.language_model.config._attn_implementation,
+                "language_attention_class": type(self.hf_model.language_model.model.layers[0].self_attn).__name__,
+                "gpu_allocated_bytes": torch.cuda.memory_allocated(),
+                "gpu_reserved_bytes": torch.cuda.memory_reserved(),
+            }
+            path = Path(os.environ["FYP_DEPLOYMENT_EVIDENCE"]) / f"model_rank_{self._rank}.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(report, indent=2) + "\n")
+            print("FYP_ROLLOUT_MODEL", json.dumps(report), flush=True)
         if self.cfg.rollout.get("enable_offload", False):
             self.offload_model()
 
@@ -429,10 +452,11 @@ class MultiStepRolloutWorker(Worker):
                     processor=self.input_processor,
                     precision=self.precision,
                 )
-                chunk_actions, _, _, _ = self.predict(
+                chunk_actions, chunk_action_tokens, _, _ = self.predict(
                     processed_obs,
                     mode="eval",
                 )
+                self.log_actions_and_tokens(chunk_actions, chunk_action_tokens, step, i, 0)
                 await self.send_chunk_actions(chunk_actions)
 
                 if "meta" in env_batch:
@@ -446,6 +470,9 @@ class MultiStepRolloutWorker(Worker):
             for key, value in env_info_list.items():
                 eval_info[f"env_info/{key}"].append(value)
         eval_metrics = create_rollout_batch(eval_info)
+        self.save_action_logs("eval")
+        if os.environ.get("FYP_DEPLOYMENT_EVIDENCE"):
+            print("FYP_ROLLOUT_GPU_PEAK_BYTES", torch.cuda.max_memory_allocated(), flush=True)
         if self.cfg.rollout.get("enable_offload", False):
             self.offload_model()
         return eval_metrics

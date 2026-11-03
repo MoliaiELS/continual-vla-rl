@@ -112,6 +112,7 @@ rollout:
   model_dir: "${oc.env:FYP_MODEL_PATH}"
   enable_offload: False
   pipeline_stage_num: 1
+  enable_action_logging: True
 
 actor:
   group_name: "ActorGroup"

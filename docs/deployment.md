@@ -30,6 +30,8 @@
 ./tools/remote.ps1 bootstrap-status
 ./tools/remote.ps1 model-download # 后台下载固定 SFT snapshot 到个人存储盘，不占 GPU
 ./tools/remote.ps1 model-status   # 查看下载进度与大小/SHA256 校验结果
+./tools/remote.ps1 rollout       # 后台等待校验通过，再提交两条完整 SFT rollout；等待时不占 GPU
+./tools/remote.ps1 rollout-status
 ./tools/remote.ps1 smoke          # CUDA + 作业独立 Ray + LIBERO/EGL，非策略评估
 ./tools/remote.ps1 config         # 额外导出训练/评估的 resolved config
 ./tools/remote.ps1 eval-smoke     # 模型下载完整后，2 条 SFT 回合

@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
+import os
+from pathlib import Path
+
 from omegaconf.dictconfig import DictConfig
 
 from rlinf.scheduler import Worker
@@ -63,5 +67,9 @@ class EmbodiedEvalRunner:
         eval_metrics = {f"eval/{k}": v for k, v in eval_metrics.items()}
         self.metric_loger.log(step=0, data=eval_metrics)
         print(f"{eval_metrics=}")
+        if os.environ.get("FYP_DEPLOYMENT_EVIDENCE"):
+            path = Path(os.environ["FYP_DEPLOYMENT_EVIDENCE"]) / "eval_metrics.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(eval_metrics, indent=2) + "\n")
 
         self.metric_loger.finish()

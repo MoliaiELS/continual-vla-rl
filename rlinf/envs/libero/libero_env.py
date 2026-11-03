@@ -13,7 +13,9 @@
 # limitations under the License.
 
 import copy
+import json
 import os
+from pathlib import Path
 from typing import List, Optional, Union
 
 # import gym
@@ -48,6 +50,11 @@ class LiberoEnv(gym.Env):
         self.num_envs = self.cfg.num_envs
         self.group_size = self.cfg.group_size
         self.num_group = self.cfg.num_group
+        # Opt-in deployment evidence; counters observe calls without changing the policy.
+        self.evidence_dir = os.environ.get("FYP_DEPLOYMENT_EVIDENCE")
+        self.first_success_step = np.zeros(self.num_envs, dtype=np.int32)
+        self.deployment_evidence = {"policy_env_steps": 0, "settling_env_steps": 0,
+                                    "post_success_executed_steps": 0, "episodes": []}
         self.use_fixed_reset_state_ids = cfg.use_fixed_reset_state_ids
         self.fixed_task_ids = cfg.get("fixed_task_ids", None)
         self.log_trajectories = cfg.get("log_trajectories", False)
@@ -511,6 +518,12 @@ class LiberoEnv(gym.Env):
             zero_actions = np.zeros((self.num_envs, 7))
             raw_obs, _reward, terminations, info_lists = self.env.step(zero_actions)
 
+        if self.evidence_dir:
+            # The wrapper actually steps all environments, including subset resets.
+            self.deployment_evidence["settling_env_steps"] += 10 * self.num_envs
+            self.first_success_step[env_idx] = 0
+            self._write_deployment_evidence()
+
         obs = self._wrap_obs(raw_obs)
         if env_idx is not None:
             self._reset_metrics(env_idx)
@@ -542,6 +555,28 @@ class LiberoEnv(gym.Env):
         infos = list_of_dict_to_dict_of_list(info_lists)
         truncations = self.elapsed_steps >= self.cfg.max_episode_steps
 
+        if self.evidence_dir:
+            self.deployment_evidence["policy_env_steps"] += self.num_envs
+            self.deployment_evidence["post_success_executed_steps"] += int((self.first_success_step > 0).sum())
+            first = np.logical_and(terminations, self.first_success_step == 0)
+            self.first_success_step[first] = self.elapsed_steps[first]
+            for env_id in np.flatnonzero(truncations):
+                first_step = int(self.first_success_step[env_id])
+                self.deployment_evidence["episodes"].append({
+                    "env_id": int(env_id), "task_id": int(self.task_ids[env_id]),
+                    "init_state_id": int(self.trial_ids[env_id]),
+                    "language": self.task_descriptions[env_id],
+                    "wrapper_seed": int(self.seed), "simulator_reset_seed": 0,
+                    "policy_env_steps": int(self.elapsed_steps[env_id]),
+                    "first_success_step": first_step or None,
+                    "success_ever": bool(self.success_once[env_id] or terminations[env_id]),
+                    "success_final": bool(terminations[env_id]),
+                    "steps_through_first_success_or_horizon": first_step or int(self.elapsed_steps[env_id]),
+                    "post_success_executed_steps": int(self.elapsed_steps[env_id]) - first_step if first_step else 0,
+                })
+            if truncations.any():
+                self._write_deployment_evidence()
+
         obs = self._wrap_obs(raw_obs)
 
         step_reward = self._calc_step_reward(terminations)
@@ -570,6 +605,11 @@ class LiberoEnv(gym.Env):
             to_tensor(truncations),
             infos,
         )
+
+    def _write_deployment_evidence(self):
+        path = Path(self.evidence_dir) / f"env_rank_{self.rank}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self.deployment_evidence, indent=2) + "\n")
 
     def chunk_step(self, chunk_actions):
         # chunk_actions: [num_envs, chunk_step, action_dim]
