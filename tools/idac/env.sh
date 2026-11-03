@@ -9,6 +9,8 @@ export PIP_CACHE_DIR="$FYP_DATA_ROOT/cache/pip"
 export HF_HOME="$FYP_DATA_ROOT/cache/huggingface"
 export HF_HUB_DISABLE_TELEMETRY=1
 export HF_HUB_DISABLE_XET=1
+export HF_HUB_DOWNLOAD_TIMEOUT=60 HF_HUB_ETAG_TIMEOUT=30
+export FYP_MODEL_PATH="${FYP_MODEL_PATH:-$FYP_DATA_ROOT/models/Openvla-oft-SFT-libero-spatial-traj1}"
 export PYTHONUNBUFFERED=1
 export TMPDIR="$FYP_DATA_ROOT/tmp"
 export XDG_CACHE_HOME="$FYP_DATA_ROOT/cache/xdg"

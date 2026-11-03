@@ -94,7 +94,7 @@ done
 tail -n 12 '$data/reports/rollout-launch.log'
 if test -s '$data/reports/rollout-launch.job-id'; then
   job_id=`$(cat '$data/reports/rollout-launch.job-id')
-  squeue -j `"`$job_id`" -h -o '%i %j %T %R'
+  squeue -u `$(id -un) -h -o '%i %j %T %R'
   sacct -j `"`$job_id`" --format=JobID,State,ExitCode,Elapsed -P
 fi
 "@

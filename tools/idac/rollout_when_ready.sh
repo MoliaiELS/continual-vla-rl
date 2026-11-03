@@ -15,7 +15,7 @@ on_exit() {
     fi
 }
 trap on_exit EXIT
-rm -f "$report.job-id"
+rm -f "$report.job-id" "$report.exit-code"
 git diff --quiet && git diff --cached --quiet
 export FYP_JOB_REPO="$FYP_REPO"
 mkdir -p "$FYP_DATA_ROOT/logs"
