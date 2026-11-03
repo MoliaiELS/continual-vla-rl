@@ -11,6 +11,21 @@ cd "$FYP_REPO"
 git diff --quiet && git diff --cached --quiet
 python tools/idac/prepare.py
 export FYP_MODEL_PATH="${FYP_MODEL_PATH:-$FYP_DATA_ROOT/models/Openvla-oft-SFT-libero-spatial-traj1}"
+if [[ "$mode" == eval || "$mode" == train ]]; then
+    python - <<'PY'
+import json
+import os
+from pathlib import Path
+root = Path(os.environ["FYP_MODEL_PATH"])
+manifest = json.loads((Path(os.environ["FYP_DATA_ROOT"]) / "reports/model.snapshot.json").read_text())
+assert manifest["verified"], "Download and verify the fixed SFT snapshot first"
+assert manifest["revision"] == "39e5240e879c80b6cda6b3a83763dad717f5c05d"
+for entry in manifest["files"]:
+    path = root / entry["name"]
+    assert path.is_file() and path.stat().st_size == entry["size"], str(path)
+print("SFT_SNAPSHOT", manifest["repository"], manifest["revision"])
+PY
+fi
 export RAY_TMPDIR="/tmp/fyp_${USER}_${SLURM_JOB_ID}"
 export FYP_RAY_SPILL_DIR="$LOG_DIR/ray-spill"
 export FYP_RAY_ISOLATED=1 FYP_NUM_GPUS=1

@@ -28,6 +28,8 @@
 ./tools/remote.ps1 sync
 ./tools/remote.ps1 bootstrap
 ./tools/remote.ps1 bootstrap-status
+./tools/remote.ps1 model-download # 后台下载固定 SFT snapshot 到个人存储盘，不占 GPU
+./tools/remote.ps1 model-status   # 查看下载进度与大小/SHA256 校验结果
 ./tools/remote.ps1 smoke          # CUDA + 作业独立 Ray + LIBERO/EGL，非策略评估
 ./tools/remote.ps1 config         # 额外导出训练/评估的 resolved config
 ./tools/remote.ps1 eval-smoke     # 模型下载完整后，2 条 SFT 回合
@@ -62,6 +64,8 @@ export TMPDIR=/mnt/slurmfs-4090node3/user_data/yguo704/RLinf/tmp
 - HF 主站当前连接被 reset；先核对合法镜像，不安装代理。模型下载必须固定 snapshot revision 并核对文件，不能把空目录算下载完成。
 
 ## 验收与研究接口
+
+作者 Spatial SFT 固定 snapshot 为 `39e5240e879c80b6cda6b3a83763dad717f5c05d`。HF 主站仍连接重置，下载经 `https://hf-mirror.com`，不安装代理。`model.snapshot.json` 记录仓库、revision、端点、文件大小和 LFS SHA256；全部文件大小与 LFS 哈希验证通过后才标记 verified。评估/训练作业会检查该标记及文件大小。权重约 15.08 GB，位于个人存储盘。
 
 按 [Notion 部署说明](https://app.notion.com/p/409d26c2767d81a49702cd9763c738dd) 分阶段验收：环境身份 → SFT 闭环 → 有效 GRPO 更新 → 保存与独立重载 → 两任务等预算 Seq/Joint。
 

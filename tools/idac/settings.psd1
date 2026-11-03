@@ -10,4 +10,7 @@
     Node = '' # Slurm chooses an available compute node matching Gres.
     Gres = 'gpu:4090:1'
     Cpus = 8
+    ModelRepository = 'Haozhan72/Openvla-oft-SFT-libero-spatial-traj1'
+    ModelRevision = '39e5240e879c80b6cda6b3a83763dad717f5c05d'
+    ModelEndpoint = 'https://hf-mirror.com'
 }

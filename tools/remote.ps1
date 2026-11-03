@@ -1,5 +1,5 @@
 param(
-    [Parameter(Position=0)][ValidateSet('doctor','sync','bootstrap','bootstrap-status','smoke','config','eval-smoke','train-smoke','status','logs')][string]$Command = 'doctor',
+    [Parameter(Position=0)][ValidateSet('doctor','sync','bootstrap','bootstrap-status','model-download','model-status','smoke','config','eval-smoke','train-smoke','status','logs')][string]$Command = 'doctor',
     [Parameter(Position=1)][string]$JobId
 )
 $ErrorActionPreference = 'Stop'
@@ -58,6 +58,23 @@ echo 'SYNC_OK $sha $snapshot'
     }
     'bootstrap-status' {
         Invoke-Remote "if test -f '$data/reports/bootstrap.complete'; then echo BOOTSTRAP_COMPLETE; echo 'Identity: $data/reports/environment.identity.json'; echo 'Dependencies: $data/reports/requirements.resolved.txt'; else echo BOOTSTRAP_NOT_COMPLETE; tail -n 30 '$data/reports/bootstrap.log'; fi"
+    }
+    'model-download' {
+        $sha = Get-Commit
+        $snapshot = "$($cfg.RunCodeRoot)/$sha"
+        Invoke-Remote @"
+test -f '$snapshot/tools/idac/download_model.py'
+mkdir -p '$data/reports'
+export HF_ENDPOINT='$($cfg.ModelEndpoint)' FYP_MODEL_REPOSITORY='$($cfg.ModelRepository)' FYP_MODEL_REVISION='$($cfg.ModelRevision)'
+nohup flock -n '$data/model-download.lock' bash -c 'set -euo pipefail; source "`$1/tools/idac/env.sh"; cd "`$FYP_REPO"; exec nice -n 19 python -u tools/idac/download_model.py' _ '$snapshot' > '$data/reports/model-download.log' 2>&1 < /dev/null &
+echo MODEL_DOWNLOAD_PID=`$!
+"@
+    }
+    'model-status' {
+        Invoke-Remote @"
+if test -f '$data/reports/model.snapshot.json'; then cat '$data/reports/model.snapshot.json'; fi
+if test -f '$data/reports/model-download.log'; then tail -c 4000 '$data/reports/model-download.log'; fi
+"@
     }
     { $_ -in 'smoke','config','eval-smoke','train-smoke' } {
         $sha = Get-Commit
