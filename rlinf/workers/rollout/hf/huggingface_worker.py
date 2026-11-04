@@ -520,7 +520,14 @@ class MultiStepRolloutWorker(Worker):
             self._wait_for_actor_offload(threshold_gb=5.0)
         
         param_state_dict = self.recv(self._actor_group_name, src_rank=self._rank)
-        self.hf_model.load_state_dict(param_state_dict)
+        if os.environ.get("FYP_SPLIT_TRAIN") == "1":
+            expected = {name for name, param in self.hf_model.named_parameters() if param.requires_grad}
+            if param_state_dict.keys() != expected:
+                raise RuntimeError("Actor and rollout trainable parameter keys differ")
+            self.hf_model.load_state_dict(param_state_dict, strict=False)
+            print(f"FYP_ADAPTER_SYNC tensors={len(param_state_dict)}", flush=True)
+        else:
+            self.hf_model.load_state_dict(param_state_dict)
         del param_state_dict
         gc.collect()
         torch.cuda.empty_cache()

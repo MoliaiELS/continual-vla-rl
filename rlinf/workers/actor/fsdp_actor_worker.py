@@ -297,6 +297,18 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         return super().model_provider_func()
 
     def sync_model_to_rollout(self):
+        if os.environ.get("FYP_SPLIT_TRAIN") == "1":
+            assert self._world_size == 1 and self.cfg.actor.model.is_lora
+            assert not self.cfg.actor.enable_offload and not self.cfg.rollout.enable_offload
+            # Both workers loaded the same frozen SFT base. Send only parameters
+            # the optimizer can change, avoiding a second full model on either GPU.
+            trainable = {
+                name.replace("_fsdp_wrapped_module.", ""): param.detach().cpu().contiguous()
+                for name, param in self.model.named_parameters() if param.requires_grad
+            }
+            assert trainable
+            self.send(trainable, self._rollout_group_name, self._weight_dst_rank_in_rollout)
+            return
         if next(self.model.parameters()).is_cpu:
             self.load_fsdp_param_and_grad(self.device)
             self.load_fsdp_optimizer(self.device)
@@ -432,6 +444,16 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                 )
             else:
                 rollout_batch["loss_mask"] = reward_filter_mask
+
+            if os.environ.get("FYP_SPLIT_TRAIN") == "1":
+                mixed = (reward_matrix.max(dim=1).values > reward_matrix.min(dim=1).values)
+                kept = reward_filter_mask[0, ::group_size, 0]
+                report = {"group_returns": reward_matrix.cpu().tolist(), "groups_total": n_prompts,
+                          "groups_kept": int(kept.sum()), "mixed_kept_groups": int((mixed & kept).sum()),
+                          "valid_training_steps": int(rollout_batch["loss_mask"].sum())}
+                print("FYP_GRPO_GROUPS", json.dumps(report), flush=True)
+                if report["mixed_kept_groups"] == 0:
+                    raise RuntimeError("No retained group has varied returns; retry a predeclared seed")
 
         return rollout_batch
 
@@ -659,6 +681,9 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         bc_coeff = self.cfg.algorithm.get("bc_coeff", 0.0)
 
         metrics = {}
+        verify_update = os.environ.get("FYP_SPLIT_TRAIN") == "1"
+        initial_logprob_errors = []
+        grad_norms = []
         num_batches = 0
         for _, train_global_batch in tqdm(
             enumerate(rollout_dataloader_iter),
@@ -783,6 +808,12 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                     "max_episode_steps": self.cfg.env.train.max_episode_steps,
                 }
 
+                if verify_update and num_batches == 1:
+                    with torch.no_grad():
+                        mask = data["loss_mask"].repeat_interleave(self.model.action_dim, dim=-1)
+                        new = output_dict["logprobs"].float().reshape_as(mask)
+                        old = data["prev_logprobs"].float().reshape_as(mask)
+                        initial_logprob_errors.append((new - old).abs()[mask].cpu())
                 kwargs = preprocess_loss_inputs(**kwargs)
                 rl_loss, metrics_data = actor_loss(**kwargs)
 
@@ -882,6 +913,16 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             grad_norm = self.model.clip_grad_norm_(
                 max_norm=self.cfg.actor.optim.clip_grad
             )
+            if verify_update:
+                if not torch.isfinite(grad_norm):
+                    raise RuntimeError("Non-finite GRPO gradient norm")
+                grad_norms.append(float(grad_norm))
+                if num_batches == 1:
+                    error = torch.cat(initial_logprob_errors)
+                    if not error.numel() or not torch.isfinite(error).all():
+                        raise RuntimeError("Missing or non-finite first-batch logprob comparison")
+                    print("FYP_GRPO_INITIAL_LOGPROB", json.dumps({"tokens": error.numel(),
+                          "mean_abs": float(error.mean()), "max_abs": float(error.max())}), flush=True)
             self.optimizer.step()
 
             # Increment training step counter
@@ -896,6 +937,11 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                 data["critic/lr"] = self.optimizer.param_groups[1]["lr"]
             append_to_dict(metrics, data)
 
+        if verify_update:
+            print("FYP_GRPO_UPDATE", json.dumps({"optimizer_steps": num_batches, "grad_norms": grad_norms,
+                  "peak_gpu_bytes": torch.cuda.max_memory_allocated()}), flush=True)
+            if not any(norm > 0 for norm in grad_norms):
+                raise RuntimeError("GRPO produced no nonzero gradient")
         mean_metric_dict = {key: np.mean(value) for key, value in metrics.items()}
         mean_metric_dict = all_reduce_dict(
             mean_metric_dict, op=torch.distributed.ReduceOp.AVG

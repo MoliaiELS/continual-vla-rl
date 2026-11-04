@@ -8,13 +8,14 @@ import ray
 import torch
 
 assert torch.cuda.is_available()
-assert torch.cuda.device_count() == 1, "Expected exactly the allocated GPU"
-x = torch.ones(16, device="cuda")
-assert x.sum().item() == 16
+expected = int(os.environ["FYP_NUM_GPUS"])
+assert torch.cuda.device_count() == expected, "Expected exactly the allocated GPUs"
+for logical_id in range(expected):
+    assert torch.ones(16, device=f"cuda:{logical_id}").sum().item() == 16
 from rlinf.scheduler import Cluster, Worker
 from rlinf.scheduler.placement import PackedPlacementStrategy
 cluster = Cluster(num_nodes=1)
-assert cluster.num_accelerators_in_cluster == 1
+assert cluster.num_accelerators_in_cluster == expected
 
 @ray.remote(num_gpus=1)
 def check_gpu():
@@ -29,12 +30,13 @@ class ProbeWorker(Worker):
     def probe(self):
         import os
         import torch
-        assert os.environ["CUDA_VISIBLE_DEVICES"] == os.environ["FYP_ALLOCATED_CUDA_DEVICES"]
+        logical_id = self.global_accelerator_ids[0]
+        assert os.environ["CUDA_VISIBLE_DEVICES"] == os.environ["FYP_ALLOCATED_CUDA_DEVICES"].split(",")[logical_id]
         assert torch.cuda.device_count() == 1
         assert torch.ones(4, device="cuda").sum().item() == 4
         return {"mask": os.environ["CUDA_VISIBLE_DEVICES"], "global_ids": self.global_accelerator_ids}
 
-workers = ProbeWorker.create_group().launch(cluster, name="FypProbe", placement_strategy=PackedPlacementStrategy(start_accelerator_id=0, end_accelerator_id=0))
+workers = ProbeWorker.create_group().launch(cluster, name="FypProbe", placement_strategy=PackedPlacementStrategy(start_accelerator_id=0, end_accelerator_id=expected - 1))
 print("RLINF_GPU", workers.probe().wait())
 ray.shutdown()
 

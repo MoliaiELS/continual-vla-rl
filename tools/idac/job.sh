@@ -30,8 +30,14 @@ export RAY_TMPDIR="/tmp/fyp_${USER}_${SLURM_JOB_ID}"
 export FYP_RAY_SPILL_DIR="$LOG_DIR/ray-spill"
 export FYP_RAY_ISOLATED=1 FYP_NUM_GPUS=1
 export FYP_ALLOCATED_CUDA_DEVICES="${CUDA_VISIBLE_DEVICES:?Slurm must assign GPU visibility}"
-if [[ "$FYP_ALLOCATED_CUDA_DEVICES" =~ ^[0-9]+$ ]]; then
-    export MUJOCO_EGL_DEVICE_ID="$FYP_ALLOCATED_CUDA_DEVICES"
+IFS=, read -r -a allocated_devices <<< "$FYP_ALLOCATED_CUDA_DEVICES"
+if [[ "$mode" == train ]]; then
+    export FYP_NUM_GPUS=2 FYP_SPLIT_TRAIN=1
+fi
+[[ "${#allocated_devices[@]}" == "$FYP_NUM_GPUS" ]]
+render_device="${allocated_devices[-1]}"
+if [[ "$render_device" =~ ^[0-9]+$ ]]; then
+    export MUJOCO_EGL_DEVICE_ID="$render_device"
 fi
 export FYP_RAY_OBJECT_STORE_BYTES=2147483648
 mkdir -p "$RAY_TMPDIR" "$FYP_RAY_SPILL_DIR"
@@ -60,6 +66,9 @@ case "$mode" in
         python tools/idac/verify_sft_rollout.py
         ;;
     train)
+        export FYP_DEPLOYMENT_EVIDENCE="$LOG_DIR/evidence"
+        bash examples/embodiment/run_embodiment.sh crl_experiment/fyp_spatial_smoke --cfg job --resolve > "$LOG_DIR/train.launcher.txt"
+        python tools/idac/check_config.py
         bash examples/embodiment/run_embodiment.sh crl_experiment/fyp_spatial_smoke
         ;;
     *) echo "Unknown mode $mode" >&2; exit 2 ;;

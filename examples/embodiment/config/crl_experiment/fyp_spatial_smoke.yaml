@@ -16,7 +16,8 @@ hydra:
 cluster:
   num_nodes: 1
   component_placement:
-    actor,env,rollout: all
+    actor: 0
+    env,rollout: 1
   ray_object_store_memory: 2147483648  # FYP job.sh applies this explicitly at Ray init
 
 runner:
@@ -113,7 +114,7 @@ rollout:
   mode: "colocate"
   generation_backend: "huggingface"
   model_dir: "${oc.env:FYP_MODEL_PATH}"
-  enable_offload: True
+  enable_offload: False
   pipeline_stage_num: 1
 
 actor:
@@ -127,7 +128,7 @@ actor:
   micro_batch_size: 1
   global_batch_size: 64
   seed: 1234
-  enable_offload: True
+  enable_offload: False
   preallocate: 0   # preallocates for actor worker (GB)
 
   model:

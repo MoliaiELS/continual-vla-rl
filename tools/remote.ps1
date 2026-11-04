@@ -109,12 +109,13 @@ fi
             $adapterSetup = "export FYP_ADAPTER_PATH='$data/runs/train_$JobId/checkpoints/global_step_1/actor'`ntest -s `"`$FYP_ADAPTER_PATH/adapter_model.bin`"`ntest -s `"`$FYP_ADAPTER_PATH/adapter_config.json`""
         }
         $nodeArg = if ($cfg.Node) { "--nodelist='$($cfg.Node)'" } else { '' }
+        $gres = if ($mode -eq 'train') { $cfg.Gres -replace ':1$', ':2' } else { $cfg.Gres }
         Invoke-Remote @"
 test -f '$snapshot/tools/idac/job.sh'
 mkdir -p '$data/logs'
 export FYP_JOB_REPO='$snapshot'
 $adapterSetup
-sbatch --parsable --chdir='$snapshot' --partition='$($cfg.Partition)' $nodeArg --exclude=4090node1 --nodes=1 --ntasks=1 --gres='$($cfg.Gres)' --cpus-per-task=$($cfg.Cpus) --time=00:30:00 --job-name='fyp-$mode' --output='$data/logs/%j.out' --error='$data/logs/%j.err' '$snapshot/tools/idac/job.sh' '$mode'
+sbatch --parsable --chdir='$snapshot' --partition='$($cfg.Partition)' $nodeArg --exclude=4090node1 --nodes=1 --ntasks=1 --gres='$gres' --cpus-per-task=$($cfg.Cpus) --time=00:30:00 --job-name='fyp-$mode' --output='$data/logs/%j.out' --error='$data/logs/%j.err' '$snapshot/tools/idac/job.sh' '$mode'
 "@
     }
     { $_ -in 'status','logs' } {
