@@ -116,6 +116,7 @@ rollout:
   model_dir: "${oc.env:FYP_MODEL_PATH}"
   enable_offload: False
   pipeline_stage_num: 1
+  inference_micro_batch_size: 2
 
 actor:
   group_name: "ActorGroup"

@@ -200,6 +200,21 @@ class MultiStepRolloutWorker(Worker):
         }
 
     def predict(self, processed_obs, mode="train"):
+        batch_size = processed_obs["input_ids"].size(0)
+        micro_batch_size = self.cfg.rollout.get("inference_micro_batch_size", batch_size)
+        if not 0 < micro_batch_size <= batch_size:
+            raise ValueError(f"Invalid rollout microbatch size: {micro_batch_size}")
+        if micro_batch_size == batch_size:
+            return self._predict_batch(processed_obs, mode)
+        batches = [
+            self._predict_batch({key: value[start:start + micro_batch_size]
+                                 for key, value in processed_obs.items()}, mode)
+            for start in range(0, batch_size, micro_batch_size)
+        ]
+        actions, tokens, logprobs, values = zip(*batches)
+        return np.concatenate(actions), torch.cat(tokens), torch.cat(logprobs), torch.cat(values)
+
+    def _predict_batch(self, processed_obs, mode):
         action_token_len = self.hf_model.action_dim * self.hf_model.num_action_chunks
 
         sample_kwargs = (
