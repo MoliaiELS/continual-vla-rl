@@ -68,6 +68,8 @@ export TMPDIR=/mnt/slurmfs-4090node3/user_data/yguo704/RLinf/tmp
 
 ## 验收与研究接口
 
+2026-11-04 已通过 SFT、真实更新、保存与独立重载，作业分别为 18977、19011、19012。资源调整、logprob 一致性与逐步预算见 [本轮验收记录](deployment-validation-20261104.md)。
+
 作者 Spatial SFT 固定 snapshot 为 `39e5240e879c80b6cda6b3a83763dad717f5c05d`。HF 主站仍连接重置，下载经 `https://hf-mirror.com`，不安装代理。`model.snapshot.json` 记录仓库、revision、端点、文件大小和 LFS SHA256；全部文件大小与 LFS 哈希验证通过后才标记 verified。评估/训练作业会检查该标记及文件大小。权重约 15.08 GB，位于个人存储盘。
 
 按 [Notion 部署说明](https://app.notion.com/p/409d26c2767d81a49702cd9763c738dd) 分阶段验收：环境身份 → SFT 闭环 → 有效 GRPO 更新 → 保存与独立重载 → 两任务等预算 Seq/Joint。
