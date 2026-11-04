@@ -25,6 +25,7 @@ from tqdm import tqdm
 from rlinf.config import torch_dtype_from_precision
 from rlinf.models import get_model, get_model_config_and_processor
 from rlinf.models.embodiment.model_utils import (
+    actor_forward,
     default_logits_processor,
     prepare_observations,
 )
@@ -484,10 +485,12 @@ class MultiStepRolloutWorker(Worker):
                     processor=self.input_processor,
                     precision=self.precision,
                 )
-                chunk_actions, chunk_action_tokens, _, _ = self.predict(
+                chunk_actions, chunk_action_tokens, logprobs, _ = self.predict(
                     processed_obs,
                     mode="eval",
                 )
+                if step == 0 and i == 0 and os.environ.get("FYP_ADAPTER_PATH"):
+                    self._compare_reload_logprobs(processed_obs, chunk_action_tokens, logprobs)
                 self.log_actions_and_tokens(chunk_actions, chunk_action_tokens, step, i, 0)
                 await self.send_chunk_actions(chunk_actions)
 
@@ -508,6 +511,32 @@ class MultiStepRolloutWorker(Worker):
         if self.cfg.rollout.get("enable_offload", False):
             self.offload_model()
         return eval_metrics
+
+    @torch.no_grad()
+    def _compare_reload_logprobs(self, obs, tokens, rollout_logprobs):
+        # Same weights and action tokens. Isolate batching from FSDP and updates.
+        targets = tokens.flatten(1)
+        report = {}
+        for batch_size in (len(targets), 1):
+            logprobs = []
+            for start in range(0, len(targets), batch_size):
+                batch = slice(start, start + batch_size)
+                result = actor_forward(
+                    self.hf_model,
+                    rl_batch={key: value[batch] for key, value in obs.items()},
+                    action_token_len=targets.size(1),
+                    temperature=self._eval_sampling_params["temperature"],
+                    top_k=self._eval_sampling_params["top_k"],
+                    logits_processor_args={"action_tokens": targets[batch],
+                                          "vocab_size": self.hf_model.vocab_size,
+                                          "n_action_bins": self.hf_model.config.n_action_bins},
+                )
+                logprobs.append(result["logprobs"])
+            delta = (torch.cat(logprobs).float() - rollout_logprobs.float()).abs()
+            assert torch.isfinite(delta).all()
+            report[f"actor_forward_batch_{batch_size}"] = {"mean_abs": float(delta.mean()),
+                                                           "max_abs": float(delta.max())}
+        print("FYP_RELOAD_LOGPROB_CONTROL", json.dumps(report), flush=True)
 
     def offload_model(self):
         self.hf_model = self.hf_model.to("cpu")
