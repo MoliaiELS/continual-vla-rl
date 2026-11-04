@@ -1,5 +1,5 @@
 param(
-    [Parameter(Position=0)][ValidateSet('doctor','sync','bootstrap','bootstrap-status','model-download','model-status','rollout','rollout-status','smoke','config','eval-smoke','train-smoke','status','logs')][string]$Command = 'doctor',
+    [Parameter(Position=0)][ValidateSet('doctor','sync','bootstrap','bootstrap-status','model-download','model-status','rollout','rollout-status','smoke','config','eval-smoke','train-smoke','reload-smoke','status','logs')][string]$Command = 'doctor',
     [Parameter(Position=1)][string]$JobId
 )
 $ErrorActionPreference = 'Stop'
@@ -99,22 +99,28 @@ if test -s '$data/reports/rollout-launch.job-id'; then
 fi
 "@
     }
-    { $_ -in 'smoke','config','eval-smoke','train-smoke' } {
+    { $_ -in 'smoke','config','eval-smoke','train-smoke','reload-smoke' } {
         $sha = Get-Commit
         $snapshot = "$($cfg.RunCodeRoot)/$sha"
-        $mode = @{'smoke'='env';'config'='config';'eval-smoke'='eval';'train-smoke'='train'}[$Command]
+        $mode = @{'smoke'='env';'config'='config';'eval-smoke'='eval';'train-smoke'='train';'reload-smoke'='reload'}[$Command]
+        $adapterSetup = 'unset FYP_ADAPTER_PATH'
+        if ($Command -eq 'reload-smoke') {
+            if ($JobId -notmatch '^\d+$') { throw 'An explicit training job ID is required' }
+            $adapterSetup = "export FYP_ADAPTER_PATH='$data/runs/train_$JobId/checkpoints/global_step_1/actor'`ntest -s `"`$FYP_ADAPTER_PATH/adapter_model.bin`"`ntest -s `"`$FYP_ADAPTER_PATH/adapter_config.json`""
+        }
         $nodeArg = if ($cfg.Node) { "--nodelist='$($cfg.Node)'" } else { '' }
         Invoke-Remote @"
 test -f '$snapshot/tools/idac/job.sh'
 mkdir -p '$data/logs'
 export FYP_JOB_REPO='$snapshot'
+$adapterSetup
 sbatch --parsable --chdir='$snapshot' --partition='$($cfg.Partition)' $nodeArg --exclude=4090node1 --nodes=1 --ntasks=1 --gres='$($cfg.Gres)' --cpus-per-task=$($cfg.Cpus) --time=00:30:00 --job-name='fyp-$mode' --output='$data/logs/%j.out' --error='$data/logs/%j.err' '$snapshot/tools/idac/job.sh' '$mode'
 "@
     }
     { $_ -in 'status','logs' } {
         if ($JobId -notmatch '^\d+$') { throw 'An explicit numeric job ID is required' }
         if ($Command -eq 'status') {
-            Invoke-Remote "squeue -j '$JobId'; sacct -j '$JobId' --format=JobID,JobName,State,ExitCode,Elapsed,MaxRSS,AllocTRES -P"
+            Invoke-Remote "squeue -u `$(id -un) -h -o '%i %j %T %R' | awk '`$1 == $JobId'; sacct -j '$JobId' --format=JobID,JobName,State,ExitCode,Elapsed,MaxRSS,AllocTRES -P"
         } else {
             Invoke-Remote "tail -n 80 '$data/logs/$JobId.out' '$data/logs/$JobId.err'"
         }

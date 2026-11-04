@@ -149,6 +149,23 @@ class MultiStepRolloutWorker(Worker):
                 "gpu_allocated_bytes": torch.cuda.memory_allocated(),
                 "gpu_reserved_bytes": torch.cuda.memory_reserved(),
             }
+            adapter_path = os.environ.get("FYP_ADAPTER_PATH")
+            if adapter_path:
+                from peft import get_peft_model_state_dict
+
+                saved = torch.load(Path(adapter_path) / "adapter_model.bin", map_location="cpu", weights_only=True)
+                loaded = get_peft_model_state_dict(self.hf_model)
+                if saved.keys() != loaded.keys():
+                    raise RuntimeError("Reloaded adapter keys do not match the checkpoint")
+                changed = 0
+                for name, tensor in saved.items():
+                    actual = loaded[name].detach().cpu()
+                    if not torch.isfinite(tensor).all() or not torch.equal(actual, tensor.to(actual.dtype)):
+                        raise RuntimeError(f"Invalid reloaded adapter tensor: {name}")
+                    if ".lora_B." in name and torch.count_nonzero(actual):
+                        changed += 1
+                report["adapter"] = {"path": adapter_path, "rank": self.hf_model.peft_config["default"].r,
+                                     "tensors_matched": len(saved), "changed_lora_b_tensors": changed}
             path = Path(os.environ["FYP_DEPLOYMENT_EVIDENCE"]) / f"model_rank_{self._rank}.json"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(report, indent=2) + "\n")

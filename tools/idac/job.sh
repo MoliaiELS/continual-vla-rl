@@ -11,7 +11,7 @@ cd "$FYP_REPO"
 git diff --quiet && git diff --cached --quiet
 python tools/idac/prepare.py
 export FYP_MODEL_PATH="${FYP_MODEL_PATH:-$FYP_DATA_ROOT/models/Openvla-oft-SFT-libero-spatial-traj1}"
-if [[ "$mode" == eval || "$mode" == train ]]; then
+if [[ "$mode" == eval || "$mode" == train || "$mode" == reload ]]; then
     python - <<'PY'
 import json
 import os
@@ -48,11 +48,15 @@ case "$mode" in
         bash examples/embodiment/eval_embodiment.sh crl_experiment/fyp_spatial_eval --cfg job --resolve > "$LOG_DIR/eval.launcher.txt"
         python tools/idac/check_config.py
         ;;
-    eval)
+    eval|reload)
         export FYP_DEPLOYMENT_EVIDENCE="$LOG_DIR/evidence"
-        bash examples/embodiment/eval_embodiment.sh crl_experiment/fyp_spatial_eval --cfg job --resolve > "$LOG_DIR/eval.launcher.txt"
-        python tools/idac/check_config.py
-        bash examples/embodiment/eval_embodiment.sh crl_experiment/fyp_spatial_eval
+        overrides=()
+        if [[ "$mode" == reload ]]; then
+            overrides+=(actor.model.is_lora=True "+actor.model.lora_path=${FYP_ADAPTER_PATH:?Missing training adapter}")
+        fi
+        bash examples/embodiment/eval_embodiment.sh crl_experiment/fyp_spatial_eval "${overrides[@]}" --cfg job --resolve > "$LOG_DIR/eval.launcher.txt"
+        python tools/idac/check_config.py "${overrides[@]}"
+        bash examples/embodiment/eval_embodiment.sh crl_experiment/fyp_spatial_eval "${overrides[@]}"
         python tools/idac/verify_sft_rollout.py
         ;;
     train)

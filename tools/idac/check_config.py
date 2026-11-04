@@ -1,5 +1,6 @@
 """Compose the real Hydra entrypoint without importing models or starting Ray."""
 import os
+import sys
 from pathlib import Path
 
 from hydra import compose, initialize_config_dir
@@ -14,6 +15,8 @@ OmegaConf.register_new_resolver("multiply", lambda x, y: x * y, replace=True)
 with initialize_config_dir(config_dir=str(repo / "examples/embodiment/config/crl_experiment"), version_base="1.1"):
     for name in ("fyp_spatial_smoke", "fyp_spatial_eval"):
         overrides = [f"runner.logger.log_path={os.environ['LOG_DIR']}"] if os.environ.get("LOG_DIR") else []
+        if name.endswith("eval"):
+            overrides.extend(sys.argv[1:])
         cfg = compose(config_name=name, overrides=overrides)
         OmegaConf.resolve(cfg)
         assert cfg.env.fixed_task_ids == [0]
