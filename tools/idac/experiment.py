@@ -1,5 +1,6 @@
 """Create, submit and execute a bounded, immutable Slurm experiment plan."""
 import argparse
+from contextlib import contextmanager
 import datetime as dt
 import json
 import math
@@ -8,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tarfile
 
 REVISION = "39e5240e879c80b6cda6b3a83763dad717f5c05d"
 DATA_REVISION = "f13aa24a3da8c43c7225569f28c562979fa0e35a"
@@ -54,6 +56,7 @@ def create(args):
         "empty_grpo_group_rule": "skip_all_optimizer_and_bc_updates_count_all_interaction",
         "optimizer_at_task_switch": "retained_in_same_process",
         "maximum_concurrent_gpus": 2, "runs": [], "evaluations": [], "jobs": [],
+        "next_suite": str(Path(args.next_suite).resolve()) if getattr(args, "next_suite", None) else None,
         "exposure": {
             "id": {"suite": "libero_spatial", "adaptation_sft": "seen", "online_rl": "train"},
             "rl_holdout": {"suite": "libero_spatial", "adaptation_sft": "seen", "online_rl": "never", "bc": "never"},
@@ -114,6 +117,40 @@ def create(args):
     print(json.dumps({"directory": str(root), "jobs": len(plan["jobs"]), "runs": len(plan["runs"]), "profile": args.profile}))
 
 
+@contextmanager
+def submission_lock(root):
+    path = Path(root) / "submission.lock"
+    with path.open("x", encoding="utf-8") as stream:
+        stream.write(str(os.getpid()))
+    try:
+        yield
+    finally:
+        path.unlink()
+
+
+def _submit_one(plan, task, dependency):
+    root = Path(plan["directory"])
+    repo = Path(os.environ["FYP_REPO"])
+    gpu = 2 if task["kind"] == "train" else 1 if task["kind"] in {"eval", "oodcheck"} else 0
+    command = ["sbatch", "--parsable", f"--partition={os.environ.get('FYP_PARTITION', 'GPU')}",
+               "--exclude=4090node1", "--nodes=1", "--ntasks=1",
+               f"--cpus-per-task={8 if gpu else 2}",
+               f"--time={'12:00:00' if task['kind'] == 'train' else '04:00:00'}",
+               "--kill-on-invalid-dep=yes", f"--chdir={repo}",
+               f"--job-name=fyp-{plan['profile'][:4]}-{task['kind']}",
+               f"--output={root}/slurm/%j.out", f"--error={root}/slurm/%j.err"]
+    if gpu:
+        command.append(f"--gres=gpu:4090:{gpu}")
+    if dependency:
+        command.append(f"--dependency=afterok:{dependency}")
+    command += [str(repo / "tools/idac/experiment_job.sh"), str(root), task["key"]]
+    (root / "slurm").mkdir(exist_ok=True)
+    result = subprocess.check_output(command, text=True).strip().split(";")[0]
+    if not result.isdigit():
+        raise RuntimeError(f"Invalid Slurm submission result: {result}")
+    return {"key": task["key"], "job_id": result, "kind": task["kind"]}
+
+
 def submit(args):
     plan = load_plan(args.directory)
     root = Path(plan["directory"])
@@ -123,33 +160,46 @@ def submit(args):
     actual = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
     if actual != plan["commit"]:
         raise ValueError("Submission checkout differs from frozen plan")
-    submitted = []
-    previous = args.dependency
-    receipt = {"commit": actual, "directory": str(root), "jobs": submitted, "complete": False}
-    for task in plan["jobs"]:
-        gpu = 2 if task["kind"] == "train" else 1 if task["kind"] in {"eval", "oodcheck"} else 0
-        command = ["sbatch", "--parsable", f"--partition={os.environ.get('FYP_PARTITION', 'GPU')}",
-                   "--exclude=4090node1", "--nodes=1", "--ntasks=1",
-                   f"--cpus-per-task={8 if gpu else 2}",
-                   f"--time={'12:00:00' if task['kind'] == 'train' else '04:00:00'}",
-                   "--kill-on-invalid-dep=yes", f"--chdir={repo}",
-                   f"--job-name=fyp-{plan['profile'][:4]}-{task['kind']}",
-                   f"--output={root}/slurm/%j.out", f"--error={root}/slurm/%j.err"]
-        if gpu:
-            command.append(f"--gres=gpu:4090:{gpu}")
-        if previous:
-            command.append(f"--dependency=afterok:{previous}")
-        command += [str(repo / "tools/idac/experiment_job.sh"), str(root), task["key"]]
-        (root / "slurm").mkdir(exist_ok=True)
-        result = subprocess.check_output(command, text=True).strip().split(";")[0]
-        if not result.isdigit():
-            raise RuntimeError(f"Invalid Slurm submission result: {result}")
-        submitted.append({"key": task["key"], "job_id": result, "kind": task["kind"]})
+    with submission_lock(root):
+        if (root / "submission.json").exists():
+            raise FileExistsError("Already submitted")
+        first = _submit_one(plan, plan["jobs"][0], args.dependency)
+        receipt = {"commit": actual, "directory": str(root), "jobs": [first],
+                   "mode": "rolling_one_child", "complete": len(plan["jobs"]) == 1,
+                   "last_job_id": first["job_id"]}
         atomic_json(root / "submission.json", receipt)
-        previous = result
-    receipt.update(complete=True, last_job_id=previous)
-    atomic_json(root / "submission.json", receipt)
-    print(json.dumps({"submitted": len(submitted), "last_job_id": previous, "directory": str(root)}))
+    print(json.dumps({"submitted": 1, "planned": len(plan["jobs"]), "last_job_id": first["job_id"], "directory": str(root)}))
+
+
+def advance(args):
+    """Only a successful allocated parent may enqueue one dependent successor."""
+    plan = load_plan(args.directory)
+    root = Path(plan["directory"])
+    with submission_lock(root):
+        receipt = json.loads((root / "submission.json").read_text())
+        current = receipt["jobs"][-1]
+        if (current["key"] != args.key or current["job_id"] != os.environ.get("SLURM_JOB_ID")
+                or receipt.get("finished")):
+            raise ValueError("Only the current allocated parent can advance this suite")
+        task = next(entry for entry in plan["jobs"] if entry["key"] == args.key)
+        result = json.loads((Path(task["log_dir"]) / "result.json").read_text())
+        if not result.get("ok") or result.get("commit") != plan["commit"] or result.get("slurm_job_id") != current["job_id"]:
+            raise ValueError("Parent task did not provide matching successful evidence")
+        index = len(receipt["jobs"])
+        if index < len(plan["jobs"]):
+            child = _submit_one(plan, plan["jobs"][index], current["job_id"])
+            receipt["jobs"].append(child)
+            receipt.update(last_job_id=child["job_id"], complete=len(receipt["jobs"]) == len(plan["jobs"]))
+        else:
+            receipt["finished"] = True
+            if plan.get("next_suite"):
+                following = load_plan(plan["next_suite"])
+                if following["commit"] != plan["commit"]:
+                    raise ValueError("Continuation suite uses another code commit")
+                submit(argparse.Namespace(directory=following["directory"], dependency=current["job_id"]))
+                receipt["continuation_started"] = following["directory"]
+        atomic_json(root / "submission.json", receipt)
+    print(json.dumps({"advanced_from": args.key, "last_job_id": receipt["last_job_id"], "finished": receipt.get("finished", False)}))
 
 
 def status(args):
@@ -175,7 +225,31 @@ def status(args):
         counts[name] = counts.get(name, 0) + 1
         if name not in {"COMPLETED", "PENDING"}:
             interesting.append({**entry, **state})
-    print(json.dumps({"directory": str(root), "counts": counts, "active_or_failed": interesting, "last_job_id": receipt.get("last_job_id")}, indent=2))
+    print(json.dumps({"directory": str(root), "counts": counts, "planned_jobs": len(plan["jobs"]),
+                      "submitted_jobs": len(receipt["jobs"]), "finished": receipt.get("finished", False),
+                      "active_or_failed": interesting, "last_job_id": receipt.get("last_job_id")}, indent=2))
+    for entry in interesting:
+        if entry["state"] in {"RUNNING", "COMPLETING", "UNKNOWN"}:
+            continue
+        for suffix in ["out", "err"]:
+            path = root / "slurm" / f"{entry['job_id']}.{suffix}"
+            if path.is_file():
+                print(f"FAILED_TASK_LOG {path}\n{path.read_text(errors='replace')[-6000:]}")
+
+
+def export_evidence(args):
+    plan = load_plan(args.directory)
+    root = Path(plan["directory"])
+    names = {"plan.json", "submission.json", "replay_manifest.json", "dataset_verified.json",
+             "result.json", "task.json", "identity.json", "eval_summary.json", "experiment.jsonl",
+             "ood_validation.json", "fyp_protocol.json", "summary.json", "summary.md",
+             "success_matrix.csv", "variant_rates.csv"}
+    destination = root / "evidence.tar.gz"
+    with tarfile.open(destination, "w:gz") as archive:
+        for path in sorted(root.rglob("*")):
+            if path.is_file() and not path.is_symlink() and (path.name in names or (path.suffix == ".png" and path.parent.name == "oodcheck")):
+                archive.add(path, arcname=str(path.relative_to(root)))
+    print(destination)
 
 
 def run_task(args):
@@ -342,15 +416,16 @@ def main():
     create_parser.add_argument("directory")
     create_parser.add_argument("--profile", choices=["qualification", "core"], required=True)
     create_parser.add_argument("--commit", required=True)
-    for name in ["submit", "status", "run-task"]:
+    create_parser.add_argument("--next-suite")
+    for name in ["submit", "status", "run-task", "advance", "export"]:
         p = sub.add_parser(name)
         p.add_argument("directory")
         if name == "submit":
             p.add_argument("--dependency")
-        if name == "run-task":
+        if name in {"run-task", "advance"}:
             p.add_argument("key")
     args = parser.parse_args()
-    {"create": create, "submit": submit, "status": status, "run-task": run_task}[args.command](args)
+    {"create": create, "submit": submit, "status": status, "run-task": run_task, "advance": advance, "export": export_evidence}[args.command](args)
 
 
 if __name__ == "__main__":

@@ -22,7 +22,7 @@
 
 资格验证只使用开发任务评估相机变体与 Object 0、1 的基座能力。主对照的末尾才执行冻结的最终评估：Spatial 7–9 的 RL 留出、训练任务上的固定相机偏移，以及 Object 3、4 的跨 suite 迁移。Object 的全预训练历史曝光为 unknown，不能据此称全训练历史未见。所有方法和参数在这些终评之前已经固定。
 
-每批 `plan.json` 记录任务、方法、预算、源代码 commit、模型/数据 revision、曝光类别、路径和完整作业列表。单批作业通过 Slurm `afterok` 串行衔接，最多同时使用 2 张 4090；任何失败保留非零退出码并阻断后续作业。代码/Conda 在 homes，数据、输出和 Ray 溢写在个人存储目录，不依赖本机常开。
+每批 `plan.json` 记录任务、方法、预算、源代码 commit、模型/数据 revision、曝光类别、路径和完整作业列表。集群实际限制同时提交的作业数量，因此每个成功的 Slurm 作业只提交一个 `afterok` 后继，最多保留当前和后继两个作业，最多同时使用 2 张 4090；任何失败保留非零退出码并阻断后续提交。代码/Conda 在 homes，数据、输出和 Ray 溢写在个人存储目录，不依赖本机常开。
 
 入口：
 
@@ -31,10 +31,9 @@
 # 代码修改经审查提交后
 ./tools/remote.ps1 sync
 ./tools/remote.ps1 experiment-tests
-./tools/remote.ps1 experiment-submit qualification -SuiteName 20261104-qualification-v1
-./tools/remote.ps1 experiment-status 20261104-qualification-v1
-# 资格验证通过后提交；也可显式依赖已核实的资格 gate 作业
-./tools/remote.ps1 experiment-submit core -SuiteName 20261104-core-v1
+./tools/remote.ps1 experiment-submit qualification -SuiteName 20261104-qualification-v2 -NextSuiteName 20261104-core-v1
+./tools/remote.ps1 experiment-status 20261104-qualification-v2
+# 主对照会在资格 gate 成功后自动启动
 ./tools/remote.ps1 experiment-status 20261104-core-v1
 ```
 

@@ -1,8 +1,9 @@
 param(
-    [Parameter(Position=0)][ValidateSet('doctor','sync','bootstrap','bootstrap-status','model-download','model-status','rollout','rollout-status','smoke','config','eval-smoke','train-smoke','reload-smoke','status','logs','experiment-inventory','experiment-submit','experiment-status','experiment-tests','replay-download')][string]$Command = 'doctor',
+    [Parameter(Position=0)][ValidateSet('doctor','sync','bootstrap','bootstrap-status','model-download','model-status','rollout','rollout-status','smoke','config','eval-smoke','train-smoke','reload-smoke','status','logs','experiment-inventory','experiment-submit','experiment-status','experiment-tests','experiment-fetch','replay-download')][string]$Command = 'doctor',
     [Parameter(Position=1)][string]$JobId,
     [string]$SuiteName,
-    [string]$Dependency
+    [string]$Dependency,
+    [string]$NextSuiteName
 )
 $ErrorActionPreference = 'Stop'
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -21,6 +22,22 @@ function Get-Commit {
 $data = $cfg.DataRoot
 $code = $cfg.CodeRoot
 switch ($Command) {
+    'experiment-fetch' {
+        if ($JobId -notmatch '^[a-zA-Z0-9_-]+$') { throw 'Specify the suite name' }
+        $sha = Get-Commit
+        $snapshot = "$($cfg.RunCodeRoot)/$sha"
+        Invoke-Remote @"
+source '$snapshot/tools/idac/env.sh'
+python '$snapshot/tools/idac/experiment.py' export '$data/experiments/$JobId'
+"@
+        $localEvidence = Join-Path $root ".local/experiments/$JobId"
+        New-Item -ItemType Directory -Force -Path $localEvidence | Out-Null
+        & scp -q "$($cfg.SshHost):$data/experiments/$JobId/evidence.tar.gz" "$localEvidence/evidence.tar.gz"
+        if ($LASTEXITCODE -ne 0) { throw 'Evidence download failed' }
+        & tar -xf "$localEvidence/evidence.tar.gz" -C $localEvidence
+        if ($LASTEXITCODE -ne 0) { throw 'Evidence extraction failed' }
+        Write-Output "LOCAL_EVIDENCE $localEvidence"
+    }
     'experiment-tests' {
         $sha = Get-Commit
         $snapshot = "$($cfg.RunCodeRoot)/$sha"
@@ -46,12 +63,20 @@ bash -n tools/idac/experiment_job.sh
         $sha = Get-Commit
         $snapshot = "$($cfg.RunCodeRoot)/$sha"
         $dependencyArg = if ($Dependency) { "--dependency '$Dependency'" } else { '' }
+        $continuationSetup = ''
+        $continuationArg = ''
+        if ($NextSuiteName) {
+            if ($JobId -ne 'qualification' -or $NextSuiteName -notmatch '^[a-zA-Z0-9_-]+$') { throw 'Only qualification can create a named core continuation' }
+            $continuationSetup = "python tools/idac/experiment.py create '$data/experiments/$NextSuiteName' --profile core --commit '$sha'"
+            $continuationArg = "--next-suite '$data/experiments/$NextSuiteName'"
+        }
         Invoke-Remote @"
 test -f '$snapshot/tools/idac/experiment.py'
 source '$snapshot/tools/idac/env.sh'
 cd '$snapshot'
 export FYP_JOB_REPO='$snapshot' FYP_PARTITION='$($cfg.Partition)'
-python tools/idac/experiment.py create '$data/experiments/$SuiteName' --profile '$JobId' --commit '$sha'
+$continuationSetup
+python tools/idac/experiment.py create '$data/experiments/$SuiteName' --profile '$JobId' --commit '$sha' $continuationArg
 python tools/idac/experiment.py submit '$data/experiments/$SuiteName' $dependencyArg
 "@
     }

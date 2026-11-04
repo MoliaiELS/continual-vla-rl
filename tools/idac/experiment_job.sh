@@ -3,6 +3,7 @@ set -euo pipefail
 : "${SLURM_JOB_ID:?Use tools/remote.ps1 experiment-submit}"
 [[ "$(hostname)" != 4090node1 ]] || { echo 'Login node refused' >&2; exit 1; }
 source "${FYP_JOB_REPO:?Missing immutable code checkout}/tools/idac/env.sh"
+command -v sbatch >/dev/null
 cd "$FYP_REPO"
 git diff --quiet && git diff --cached --quiet
 python tools/idac/prepare.py
@@ -26,4 +27,5 @@ if [[ "$FYP_NUM_GPUS" != 0 ]]; then
     if [[ "$render_device" =~ ^[0-9]+$ ]]; then export MUJOCO_EGL_DEVICE_ID="$render_device"; fi
 fi
 python tools/idac/experiment.py run-task "$suite" "$key"
+python tools/idac/experiment.py advance "$suite" "$key"
 echo "FYP_EXPERIMENT_TASK_OK $key $SLURM_JOB_ID"

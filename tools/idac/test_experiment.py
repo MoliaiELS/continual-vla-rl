@@ -22,9 +22,10 @@ SPEC.loader.exec_module(EXPERIMENT)
 COMMIT = "a" * 40
 
 
-def create_plan(directory, profile):
+def create_plan(directory, profile, next_suite=None):
     with patch.dict(os.environ, {"FYP_DATA_ROOT": str(Path(directory).parent / "data")}), contextlib.redirect_stdout(io.StringIO()):
-        EXPERIMENT.create(argparse.Namespace(directory=str(directory), profile=profile, commit=COMMIT))
+        EXPERIMENT.create(argparse.Namespace(directory=str(directory), profile=profile, commit=COMMIT,
+                                             next_suite=str(next_suite) if next_suite else None))
     return EXPERIMENT.load_plan(directory)
 
 
@@ -54,7 +55,7 @@ class PlanTests(unittest.TestCase):
                     with self.assertRaises(FileExistsError):
                         create_plan(directory, profile)
 
-    def test_submission_is_serial_and_never_requests_more_than_two_gpus(self):
+    def test_rolling_submission_queues_one_child_after_its_own_success(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary) / "qualification"
             plan = create_plan(directory, "qualification")
@@ -69,6 +70,44 @@ class PlanTests(unittest.TestCase):
 
             with patch.dict(os.environ, {"FYP_REPO": str(ROOT)}), patch.object(EXPERIMENT.subprocess, "check_output", side_effect=output), contextlib.redirect_stdout(io.StringIO()):
                 EXPERIMENT.submit(argparse.Namespace(directory=str(directory), dependency="4999"))
+                self.assertEqual(len(commands), 1)
+                receipt = json.loads((directory / "submission.json").read_text())
+                self.assertEqual(len(receipt["jobs"]), 1)
+                self.assertFalse(receipt["complete"])
+                with self.assertRaises(FileExistsError):
+                    EXPERIMENT.submit(argparse.Namespace(directory=str(directory), dependency=None))
+                for index, task in enumerate(plan["jobs"]):
+                    parent_id = str(5001 + index)
+                    args = argparse.Namespace(directory=str(directory), key=task["key"])
+                    result_file = Path(task["log_dir"]) / "result.json"
+                    with patch.dict(os.environ, {"SLURM_JOB_ID": parent_id}):
+                        # A completed payload is required; merely being the
+                        # running parent must not advance the experiment.
+                        with self.assertRaises(FileNotFoundError):
+                            EXPERIMENT.advance(args)
+                        self.assertEqual(len(commands), index + 1)
+                        result_file.parent.mkdir(parents=True, exist_ok=True)
+                        good_result = {"ok": True, "kind": task["kind"], "commit": COMMIT,
+                                       "slurm_job_id": parent_id}
+                        for invalid in (dict(good_result, ok=False), dict(good_result, commit="b" * 40),
+                                        dict(good_result, slurm_job_id="1")):
+                            result_file.write_text(json.dumps(invalid))
+                            with self.assertRaises(ValueError):
+                                EXPERIMENT.advance(args)
+                            self.assertEqual(len(commands), index + 1)
+                        result_file.write_text(json.dumps(good_result))
+                        with patch.dict(os.environ, {"SLURM_JOB_ID": "999999"}), self.assertRaises(ValueError):
+                            EXPERIMENT.advance(args)
+                        EXPERIMENT.advance(args)
+                        self.assertEqual(len(commands), min(index + 2, len(plan["jobs"])))
+                        persisted = json.loads((directory / "submission.json").read_text())
+                        self.assertEqual(len(persisted["jobs"]), len(commands))
+                        # Duplicate requests cannot queue a second child, even
+                        # when the old parent process has not exited yet.
+                        with self.assertRaises(ValueError):
+                            EXPERIMENT.advance(args)
+                        self.assertEqual(len(commands), min(index + 2, len(plan["jobs"])))
+                        self.assertFalse((directory / "submission.lock").exists())
             self.assertEqual(len(commands), len(plan["jobs"]))
             for index, command in enumerate(commands):
                 self.assertIn(f"--dependency=afterok:{4999 if index == 0 else 5000 + index}", command)
@@ -80,6 +119,7 @@ class PlanTests(unittest.TestCase):
                 self.assertFalse(any(arg.startswith("--mem=") for arg in command))
             receipt = json.loads((directory / "submission.json").read_text())
             self.assertTrue(receipt["complete"])
+            self.assertTrue(receipt["finished"])
             self.assertEqual(receipt["last_job_id"], str(5000 + len(commands)))
 
     def test_qualification_manifest_contains_only_its_training_allowlist(self):
@@ -111,6 +151,47 @@ class PlanTests(unittest.TestCase):
             self.assertEqual(task_ids, "0,1")
             self.assertEqual(command[command.index("--output") + 1], plan["replay_manifest_path"])
             self.assertEqual(Path(plan["replay_manifest_path"]).parent, directory.resolve())
+
+    def test_successful_gate_starts_exactly_one_frozen_continuation_job(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            core_directory = Path(temporary) / "core"
+            create_plan(core_directory, "core")
+            directory = Path(temporary) / "qualification"
+            plan = create_plan(directory, "qualification", next_suite=core_directory)
+            entries = [{"key": task["key"], "job_id": str(6000 + index), "kind": task["kind"]}
+                       for index, task in enumerate(plan["jobs"])]
+            parent_id = entries[-1]["job_id"]
+            EXPERIMENT.atomic_json(directory / "submission.json", {
+                "commit": COMMIT, "directory": str(directory.resolve()), "jobs": entries,
+                "complete": True, "last_job_id": parent_id,
+            })
+            gate = plan["jobs"][-1]
+            self.assertEqual(gate["key"], "gate")
+            EXPERIMENT.atomic_json(Path(gate["log_dir"]) / "result.json", {
+                "ok": True, "kind": "gate", "commit": COMMIT, "slurm_job_id": parent_id,
+            })
+            submitted = []
+
+            def output(command, **kwargs):
+                if command[0] == "git":
+                    return COMMIT + "\n"
+                submitted.append(command)
+                return "7000\n"
+
+            with patch.dict(os.environ, {"FYP_REPO": str(ROOT), "SLURM_JOB_ID": parent_id}), \
+                    patch.object(EXPERIMENT.subprocess, "check_output", side_effect=output), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                EXPERIMENT.advance(argparse.Namespace(directory=str(directory), key="gate"))
+                with self.assertRaises(ValueError):
+                    EXPERIMENT.advance(argparse.Namespace(directory=str(directory), key="gate"))
+            self.assertEqual(len(submitted), 1)
+            self.assertIn(f"--dependency=afterok:{parent_id}", submitted[0])
+            child_receipt = json.loads((core_directory / "submission.json").read_text())
+            self.assertEqual(len(child_receipt["jobs"]), 1)
+            self.assertEqual(child_receipt["last_job_id"], "7000")
+            receipt = json.loads((directory / "submission.json").read_text())
+            self.assertTrue(receipt["finished"])
+            self.assertEqual(receipt["continuation_started"], str(core_directory.resolve()))
 
     def test_training_launch_preserves_protocol_and_hard_replay_allowlist(self):
         with tempfile.TemporaryDirectory() as temporary:
