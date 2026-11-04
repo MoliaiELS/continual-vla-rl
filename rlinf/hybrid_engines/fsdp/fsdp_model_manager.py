@@ -85,6 +85,15 @@ class FSDPModelManager:
         if hasattr(module, "gradient_checkpointing_enable"):
             module.gradient_checkpointing_enable()
 
+        if os.environ.get("FYP_SPLIT_TRAIN") == "1":
+            # The split deployment has exactly one actor rank. Keep the original
+            # parameter objects so AdamW and PEFT can export their states directly.
+            assert torch.distributed.get_world_size() == 1
+            self.model = module.to(dtype=self.torch_dtype)
+            self.optimizer = optim.AdamW(self._build_param_groups(betas=(
+                self._cfg.optim.adam_beta1, self._cfg.optim.adam_beta2)))
+            return
+
         # Use FSDP for all models (including simple_cnn with NO_SHARD).
         # FSDP is preferred over DDP because it forwards attribute access via __getattr__,
         # which is needed by the training loop (e.g., self.model.action_dim).
@@ -129,29 +138,8 @@ class FSDPModelManager:
             sync_module_states=True,
         )
 
-        if os.environ.get("FYP_SPLIT_TRAIN") == "1" and torch.__version__.split("+")[0] == "2.6.0":
-            self._fix_torch26_no_shard_writeback()
-
         param_groups = self._build_param_groups(betas)
         self.optimizer = optim.AdamW(param_groups)
-
-    def _fix_torch26_no_shard_writeback(self):
-        # Local backport of pytorch/pytorch@2022588295295fa1fdee7a500adad3bd0c28b9d6.
-        # Scope it to the handles of this actor. Their backing storage is flat
-        # even when the original NO_SHARD parameter or gradient is multidimensional.
-        from types import MethodType
-        from torch.distributed.fsdp._flat_param import FlatParamHandle
-
-        def writeback(handle, src_tensor, dst_tensor, tensor_index, expected_shape, offset, is_param):
-            if not handle.uses_sharded_strategy and src_tensor is not None:
-                src_tensor = src_tensor.view(-1)
-            return FlatParamHandle._writeback_tensor(
-                handle, src_tensor, dst_tensor, tensor_index, expected_shape, offset, is_param
-            )
-
-        for module in FSDP.fsdp_modules(self.model):
-            if module._handle is not None:
-                module._handle._writeback_tensor = MethodType(writeback, module._handle)
 
     def _build_param_groups(self, betas):
         use_component_lrs = self._cfg.optim.get("use_component_lrs", False)

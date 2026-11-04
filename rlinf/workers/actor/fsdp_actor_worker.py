@@ -303,7 +303,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             # Both workers loaded the same frozen SFT base. Send only parameters
             # the optimizer can change, avoiding a second full model on either GPU.
             trainable = {
-                name.replace("_fsdp_wrapped_module.", ""): param.detach().cpu().contiguous()
+                name: param.detach().cpu().contiguous()
                 for name, param in self.model.named_parameters() if param.requires_grad
             }
             assert trainable
@@ -910,9 +910,11 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
 
             torch.cuda.empty_cache()
 
-            grad_norm = self.model.clip_grad_norm_(
-                max_norm=self.cfg.actor.optim.clip_grad
-            )
+            max_norm = self.cfg.actor.optim.clip_grad
+            if verify_update:
+                grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm)
+            else:
+                grad_norm = self.model.clip_grad_norm_(max_norm=max_norm)
             if verify_update:
                 if not torch.isfinite(grad_norm):
                     raise RuntimeError("Non-finite GRPO gradient norm")
@@ -962,6 +964,21 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         torch.distributed.barrier()
         is_lora = self.cfg.actor.model.get("is_lora", False)
         model = self.model
+
+        if os.environ.get("FYP_SPLIT_TRAIN") == "1":
+            assert self._world_size == 1 and is_lora
+            adapter = {name: tensor.detach().cpu() for name, tensor in
+                       get_peft_model_state_dict(model, save_embedding_layers=False).items()}
+            changed = sum(int(torch.count_nonzero(tensor) > 0)
+                          for name, tensor in adapter.items() if ".lora_B." in name)
+            if not changed or not all(torch.isfinite(tensor).all() for tensor in adapter.values()):
+                raise RuntimeError("Missing, unchanged, or non-finite LoRA update")
+            os.makedirs(save_base_path, exist_ok=True)
+            torch.save(adapter, os.path.join(save_base_path, "adapter_model.bin"))
+            model.peft_config["default"].save_pretrained(save_base_path)
+            torch.save(self.optimizer.state_dict(), os.path.join(save_base_path, "optim.pt"))
+            print(f"FYP_ADAPTER_SAVED tensors={len(adapter)} changed_lora_b={changed}", flush=True)
+            return
 
         optim_state = self.get_optimizer_state_dict()
 

@@ -155,7 +155,7 @@ class MultiStepRolloutWorker(Worker):
                 from peft import get_peft_model_state_dict
 
                 saved = torch.load(Path(adapter_path) / "adapter_model.bin", map_location="cpu", weights_only=True)
-                loaded = get_peft_model_state_dict(self.hf_model)
+                loaded = get_peft_model_state_dict(self.hf_model, save_embedding_layers=False)
                 if saved.keys() != loaded.keys():
                     raise RuntimeError("Reloaded adapter keys do not match the checkpoint")
                 changed = 0
