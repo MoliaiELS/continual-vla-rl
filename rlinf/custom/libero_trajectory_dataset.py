@@ -60,6 +60,9 @@ def make_collate_fn(cfg, input_processor, precision):
             **processed_obs,
             "actions": actions,
         }
+        if "replay_task_id" in samples[0]:
+            output["_replay_task_ids"] = [s["replay_task_id"] for s in samples]
+            output["_replay_sample_ids"] = [s["replay_sample_id"] for s in samples]
 
         # Handle optional logits
         if "raw_action_logits" in samples[0] and samples[0]["raw_action_logits"] is not None:
@@ -87,9 +90,36 @@ class LiberoSFTDataset(Dataset):
         use_preprocessed=True,
         use_cached_logits=False,
         logits_type="",
+        manifest_path=None,
+        allowed_task_ids=None,
+        active_task_ids=None,
+        capacity_chunks=None,
+        seed=0,
+        verified_files=None,
     ):
         self.cfg = cfg
         self.logits_type = logits_type
+        self.file_handles = {}
+        self.manifest_memory = None
+        if manifest_path is not None:
+            if use_cached_logits or logits_type:
+                raise ValueError("Manifest expert ER uses action CE, not cached/reference logits")
+            from rlinf.custom.fyp_replay import load_manifest, ManifestReplayMemory
+            manifest = load_manifest(manifest_path, allowed_task_ids)
+            if manifest.get("suite") != cfg.env.train.task_suite_name:
+                raise ValueError("Replay manifest and configured task suite differ")
+            normalization = manifest.get("normalization", {})
+            if normalization.get("unnorm_key") != cfg.actor.model.unnorm_key:
+                raise ValueError("Replay normalization does not match the frozen model key")
+            from rlinf.custom.fyp_replay import sha256_file
+            if sha256_file(normalization["source"]) != normalization["source_sha256"]:
+                raise ValueError("Replay normalization source changed after manifest creation")
+            self.manifest_memory = ManifestReplayMemory(
+                manifest, active_task_ids, allowed_task_ids, capacity_chunks,
+                cfg.actor.model.num_action_chunks, seed, verified_files)
+            self.memory_summary = self.manifest_memory.summary
+            self.file_handles = self.manifest_memory.file_handles
+            return
         task_suite_name = (
             cfg.env.train.task_suite_name
             if not use_preprocessed
@@ -142,9 +172,13 @@ class LiberoSFTDataset(Dataset):
         return " ".join(parts)
 
     def __len__(self):
+        if self.manifest_memory is not None:
+            return len(self.manifest_memory)
         return len(self.sample_indices)
 
     def __getitem__(self, idx):
+        if self.manifest_memory is not None:
+            return self.manifest_memory[idx]
         path, demo_name, timestep, task_desc = self.sample_indices[idx]
 
         if path not in self.file_handles:
@@ -185,7 +219,7 @@ class LiberoSFTDataset(Dataset):
         return output
 
     def __del__(self):
-        for fh in self.file_handles.values():
+        for fh in getattr(self, "file_handles", {}).values():
             fh.close()
 
 

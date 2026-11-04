@@ -38,6 +38,7 @@ from rlinf.envs.libero.utils import (
     to_tensor,
 )
 from rlinf.envs.libero.venv import ReconfigureSubprocEnv
+from rlinf.utils.fyp_protocol import zero_counters
 
 
 class LiberoEnv(gym.Env):
@@ -55,6 +56,8 @@ class LiberoEnv(gym.Env):
         self.first_success_step = np.zeros(self.num_envs, dtype=np.int32)
         self.deployment_evidence = {"policy_env_steps": 0, "settling_env_steps": 0,
                                     "post_success_executed_steps": 0, "episodes": []}
+        self.experiment_condition = None
+        self.experiment_evidence = {"totals": zero_counters(), "per_task": {}, "episodes": []}
         self.use_fixed_reset_state_ids = cfg.use_fixed_reset_state_ids
         self.fixed_task_ids = cfg.get("fixed_task_ids", None)
         self.log_trajectories = cfg.get("log_trajectories", False)
@@ -196,11 +199,57 @@ class LiberoEnv(gym.Env):
         self.cumsum_trial_id_bins = np.cumsum(self.trial_id_bins)
 
     def update_reset_state_ids(self):
+        if self.experiment_condition is not None:
+            # The runner supplies the next condition. Do not consume a second,
+            # hidden task/initial-state sample between protocol iterations.
+            return
         if self.cfg.only_eval or self.cfg.use_ordered_reset_state_ids:
             reset_state_ids = self._get_ordered_reset_state_ids(self.num_group)
         else:
             reset_state_ids = self._get_random_reset_state_ids(self.num_group)
         self.reset_state_ids = reset_state_ids.repeat(self.group_size)
+
+    def set_experiment_condition(self, task_id, init_state_id, iteration):
+        """Configure a whole GRPO group; reset remains in the normal step path."""
+        task_id, init_state_id, iteration = int(task_id), int(init_state_id), int(iteration)
+        if self.cfg.only_eval or self.auto_reset or self.ignore_terminations or not self.use_fixed_reset_state_ids:
+            raise ValueError("FYP training requires non-auto-reset LIBERO with real done masks")
+        if self.world_size != 1 or self.num_group != 1 or self.group_size != 8 or self.num_envs != 8:
+            raise ValueError("FYP protocol currently supports one worker, G1/K8 only")
+        if not 0 <= task_id < self.task_suite.get_num_tasks():
+            raise ValueError(f"Task {task_id} is outside this LIBERO suite")
+        if not 0 <= init_state_id < len(self.task_suite.get_task_init_states(task_id)):
+            raise ValueError(f"Invalid initial state {init_state_id} for task {task_id}")
+        if iteration < 0:
+            raise ValueError("Experiment iteration must be nonnegative")
+        if self.experiment_condition is not None and iteration != self.experiment_condition["iteration"] + 1:
+            raise ValueError("Experiment conditions must advance by one complete iteration")
+        self.experiment_condition = {"task_id": task_id, "init_state_id": init_state_id,
+                                     "iteration": iteration}
+        # Mapping to one task keeps the existing reset/reconfiguration and reward
+        # paths intact, including recreation of simulator workers on task change.
+        self.fixed_task_ids = [task_id]
+        self._compute_total_num_group_envs()
+        self.reset_state_ids = np.full(self.num_envs, init_state_id, dtype=np.int64)
+        self._is_start = True
+        return copy.deepcopy(self.experiment_condition)
+
+    def get_experiment_evidence(self):
+        return copy.deepcopy(self.experiment_evidence)
+
+    def _add_experiment_cost(self, key, amount, task_id):
+        amount = int(amount)
+        self.experiment_evidence["totals"][key] += amount
+        counters = self.experiment_evidence["per_task"].setdefault(str(int(task_id)), zero_counters())
+        counters[key] += amount
+
+    def _write_experiment_evidence(self):
+        if self.evidence_dir:
+            path = Path(self.evidence_dir) / f"experiment_env_rank_{self.rank}.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix(".json.tmp")
+            temporary.write_text(json.dumps(self.experiment_evidence, indent=2) + "\n")
+            temporary.replace(path)
 
     def _init_task_and_trial_ids(self):
         self.task_ids, self.trial_ids = (
@@ -230,6 +279,15 @@ class LiberoEnv(gym.Env):
 
             # Calculate states per task from TOTAL num_envs
             states_per_task_total = total_envs // num_tasks
+
+            explicit_eval_ids = self.cfg.get("fyp_eval_init_ids", None)
+            if explicit_eval_ids is not None:
+                explicit_eval_ids = list(explicit_eval_ids)
+                repeats = int(self.cfg.get("fyp_eval_repeat", 1))
+                if (not explicit_eval_ids or repeats < 1
+                        or len(set(explicit_eval_ids)) != len(explicit_eval_ids)):
+                    raise ValueError("fyp_eval_init_ids must be distinct and fyp_eval_repeat positive")
+                states_per_task_total = len(explicit_eval_ids) * repeats
 
             if total_envs % num_tasks != 0:
                 raise ValueError(
@@ -261,9 +319,15 @@ class LiberoEnv(gym.Env):
                 # Get available states for this task
                 task_num_states = self.trial_id_bins[task_id_idx]
 
-                sampled_state_indices = self._generator.choice(
-                    task_num_states, size=states_per_task_total, replace=True
-                )
+                if explicit_eval_ids is not None:
+                    if any(int(state) != state or not 0 <= int(state) < task_num_states
+                           for state in explicit_eval_ids):
+                        raise ValueError(f"Explicit evaluation initial state outside task {task_id}")
+                    sampled_state_indices = np.tile(np.asarray(explicit_eval_ids, dtype=int), repeats)
+                else:
+                    sampled_state_indices = self._generator.choice(
+                        task_num_states, size=states_per_task_total, replace=True
+                    )
 
                 for state_idx in sampled_state_indices:
                     all_reset_state_ids.append(task_start_idx + state_idx)
@@ -518,11 +582,16 @@ class LiberoEnv(gym.Env):
             zero_actions = np.zeros((self.num_envs, 7))
             raw_obs, _reward, terminations, info_lists = self.env.step(zero_actions)
 
-        if self.evidence_dir:
+        if self.evidence_dir or getattr(self, "experiment_evidence", None) is not None:
             # The wrapper actually steps all environments, including subset resets.
             self.deployment_evidence["settling_env_steps"] += 10 * self.num_envs
             self.first_success_step[env_idx] = 0
-            self._write_deployment_evidence()
+            if self.evidence_dir:
+                self._write_deployment_evidence()
+        if getattr(self, "experiment_evidence", None) is not None:
+            for task_id in np.unique(self.task_ids):
+                self._add_experiment_cost("settling_env_steps", 10 * int((self.task_ids == task_id).sum()), task_id)
+            self._write_experiment_evidence()
 
         obs = self._wrap_obs(raw_obs)
         if env_idx is not None:
@@ -555,14 +624,20 @@ class LiberoEnv(gym.Env):
         infos = list_of_dict_to_dict_of_list(info_lists)
         truncations = self.elapsed_steps >= self.cfg.max_episode_steps
 
-        if self.evidence_dir:
+        if self.evidence_dir or getattr(self, "experiment_evidence", None) is not None:
+            if getattr(self, "experiment_evidence", None) is not None:
+                for task_id in np.unique(self.task_ids):
+                    task_mask = self.task_ids == task_id
+                    self._add_experiment_cost("policy_env_steps", task_mask.sum(), task_id)
+                    self._add_experiment_cost("post_done_executed_steps",
+                                             (task_mask & (self.first_success_step > 0)).sum(), task_id)
             self.deployment_evidence["policy_env_steps"] += self.num_envs
             self.deployment_evidence["post_success_executed_steps"] += int((self.first_success_step > 0).sum())
             first = np.logical_and(terminations, self.first_success_step == 0)
             self.first_success_step[first] = self.elapsed_steps[first]
             for env_id in np.flatnonzero(truncations):
                 first_step = int(self.first_success_step[env_id])
-                self.deployment_evidence["episodes"].append({
+                episode = {
                     "env_id": int(env_id), "task_id": int(self.task_ids[env_id]),
                     "init_state_id": int(self.trial_ids[env_id]),
                     "language": self.task_descriptions[env_id],
@@ -573,9 +648,23 @@ class LiberoEnv(gym.Env):
                     "success_final": bool(terminations[env_id]),
                     "steps_through_first_success_or_horizon": first_step or int(self.elapsed_steps[env_id]),
                     "post_success_executed_steps": int(self.elapsed_steps[env_id]) - first_step if first_step else 0,
-                })
+                }
+                self.deployment_evidence["episodes"].append(episode)
+                if getattr(self, "experiment_evidence", None) is not None:
+                    episode = dict(episode, episode_index=len(self.experiment_evidence["episodes"]),
+                                   rank=int(self.rank), iteration=(self.experiment_condition or {}).get("iteration"))
+                    self.experiment_evidence["episodes"].append(episode)
+                    task_id = episode["task_id"]
+                    self._add_experiment_cost("episodes_collected", 1, task_id)
+                    self._add_experiment_cost("success_ever_count", episode["success_ever"], task_id)
+                    self._add_experiment_cost("success_final_count", episode["success_final"], task_id)
+                    self._add_experiment_cost("steps_through_first_success_or_horizon",
+                                             episode["steps_through_first_success_or_horizon"], task_id)
             if truncations.any():
-                self._write_deployment_evidence()
+                if self.evidence_dir:
+                    self._write_deployment_evidence()
+                if getattr(self, "experiment_evidence", None) is not None:
+                    self._write_experiment_evidence()
 
         obs = self._wrap_obs(raw_obs)
 
@@ -628,6 +717,9 @@ class LiberoEnv(gym.Env):
             chunk_rewards.append(step_reward)
             raw_chunk_terminations.append(terminations)
             raw_chunk_truncations.append(truncations)
+
+        if self.experiment_condition is not None:
+            self._write_experiment_evidence()
 
         chunk_rewards = torch.stack(chunk_rewards, dim=1)  # [num_envs, chunk_steps]
         raw_chunk_terminations = torch.stack(

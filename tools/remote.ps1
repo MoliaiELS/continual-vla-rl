@@ -1,6 +1,8 @@
 param(
-    [Parameter(Position=0)][ValidateSet('doctor','sync','bootstrap','bootstrap-status','model-download','model-status','rollout','rollout-status','smoke','config','eval-smoke','train-smoke','reload-smoke','status','logs')][string]$Command = 'doctor',
-    [Parameter(Position=1)][string]$JobId
+    [Parameter(Position=0)][ValidateSet('doctor','sync','bootstrap','bootstrap-status','model-download','model-status','rollout','rollout-status','smoke','config','eval-smoke','train-smoke','reload-smoke','status','logs','experiment-inventory','experiment-submit','experiment-status','experiment-tests','replay-download')][string]$Command = 'doctor',
+    [Parameter(Position=1)][string]$JobId,
+    [string]$SuiteName,
+    [string]$Dependency
 )
 $ErrorActionPreference = 'Stop'
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -19,6 +21,85 @@ function Get-Commit {
 $data = $cfg.DataRoot
 $code = $cfg.CodeRoot
 switch ($Command) {
+    'experiment-tests' {
+        $sha = Get-Commit
+        $snapshot = "$($cfg.RunCodeRoot)/$sha"
+        Invoke-Remote @"
+test -f '$snapshot/tools/idac/test_protocol.py'
+source '$snapshot/tools/idac/env.sh'
+cd '$snapshot'
+python tools/idac/test_protocol.py
+python tools/idac/test_analysis.py
+python tools/idac/test_replay.py
+python tools/idac/test_rollout_evidence.py
+python tools/idac/test_ood_validation.py
+python tools/idac/test_experiment.py
+python -m py_compile tools/idac/experiment.py rlinf/runners/embodied_runner.py rlinf/runners/embodied_eval_runner.py rlinf/workers/actor/fsdp_actor_worker.py rlinf/workers/env/env_worker.py rlinf/envs/libero/libero_env.py
+bash -n tools/idac/experiment_job.sh
+"@
+    }
+    'experiment-submit' {
+        if ($JobId -notin @('qualification','core')) { throw 'Specify qualification or core' }
+        if (-not $SuiteName) { $SuiteName = (Get-Date -Format 'yyyyMMdd') + '-' + $JobId + '-v1' }
+        if ($SuiteName -notmatch '^[a-zA-Z0-9_-]+$') { throw 'Invalid suite name' }
+        if ($Dependency -and $Dependency -notmatch '^\d+$') { throw 'Invalid dependency job ID' }
+        $sha = Get-Commit
+        $snapshot = "$($cfg.RunCodeRoot)/$sha"
+        $dependencyArg = if ($Dependency) { "--dependency '$Dependency'" } else { '' }
+        Invoke-Remote @"
+test -f '$snapshot/tools/idac/experiment.py'
+source '$snapshot/tools/idac/env.sh'
+cd '$snapshot'
+export FYP_JOB_REPO='$snapshot' FYP_PARTITION='$($cfg.Partition)'
+python tools/idac/experiment.py create '$data/experiments/$SuiteName' --profile '$JobId' --commit '$sha'
+python tools/idac/experiment.py submit '$data/experiments/$SuiteName' $dependencyArg
+"@
+    }
+    'experiment-status' {
+        if ($JobId -notmatch '^[a-zA-Z0-9_-]+$') { throw 'Specify the suite name' }
+        $sha = Get-Commit
+        $snapshot = "$($cfg.RunCodeRoot)/$sha"
+        Invoke-Remote @"
+source '$snapshot/tools/idac/env.sh'
+python '$snapshot/tools/idac/experiment.py' status '$data/experiments/$JobId'
+tail -c 1400 '$data/reports/replay-download.log' 2>/dev/null || true
+"@
+    }
+    'replay-download' {
+        Invoke-Remote @"
+mkdir -p '$data/datasets/libero_raw' '$data/reports' '$data/cache/huggingface'
+nohup flock -n '$data/replay-download.lock' bash -c '
+set -euo pipefail
+source "`$1/etc/profile.d/conda.sh"
+conda activate "`$1/envs/vla_budget_rl"
+export HF_ENDPOINT=https://hf-mirror.com HF_HUB_DISABLE_XET=1 HF_HUB_DISABLE_TELEMETRY=1 HF_HOME="`$2/cache/huggingface"
+exec nice -n 19 python -m huggingface_hub.commands.huggingface_cli download yifengzhu-hf/LIBERO-datasets \
+libero_spatial/pick_up_the_black_bowl_between_the_plate_and_the_ramekin_and_place_it_on_the_plate_demo.hdf5 \
+libero_spatial/pick_up_the_black_bowl_next_to_the_ramekin_and_place_it_on_the_plate_demo.hdf5 \
+libero_spatial/pick_up_the_black_bowl_from_table_center_and_place_it_on_the_plate_demo.hdf5 \
+libero_spatial/pick_up_the_black_bowl_on_the_cookie_box_and_place_it_on_the_plate_demo.hdf5 \
+libero_spatial/pick_up_the_black_bowl_in_the_top_drawer_of_the_wooden_cabinet_and_place_it_on_the_plate_demo.hdf5 \
+--repo-type dataset --revision f13aa24a3da8c43c7225569f28c562979fa0e35a --local-dir "`$2/datasets/libero_raw"
+' _ '$($cfg.CondaRoot)' '$data' > '$data/reports/replay-download.log' 2>&1 < /dev/null &
+echo REPLAY_DOWNLOAD_PID=`$!
+"@
+    }
+    'experiment-inventory' {
+        Invoke-Remote @"
+scontrol show partition '$($cfg.Partition)'
+find '$data/datasets' -maxdepth 3 -type f -name '*.hdf5' -print 2>/dev/null | head -n 15 || true
+find /mnt/slurmfs-4090node3/public_data -maxdepth 2 -iname '*libero*' -print 2>/dev/null | head -n 15 || true
+'$($cfg.CondaRoot)/envs/vla_budget_rl/bin/python' - <<'PY'
+import json
+from pathlib import Path
+root=Path('$data/models/Openvla-oft-SFT-libero-spatial-traj1')
+c=json.loads((root/'config.json').read_text())
+print('NORM_STATS_KEYS', list(c.get('norm_stats', {})))
+PY
+tail -c 1200 '$data/reports/replay-download.log' 2>/dev/null || true
+find '$data/datasets/libero_raw' -maxdepth 7 -type f -name '*.incomplete' -printf '%s %f\n' 2>/dev/null | head -n 8 || true
+"@
+    }
     'doctor' {
         Invoke-Remote @'
 hostname

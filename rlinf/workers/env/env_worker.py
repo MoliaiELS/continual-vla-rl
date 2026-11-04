@@ -22,6 +22,7 @@ from rlinf.envs.action_utils import prepare_actions
 from rlinf.envs.env_manager import EnvManager
 from rlinf.scheduler import Cluster, Worker
 from rlinf.utils.placement import HybridComponentPlacement
+from rlinf.utils.fyp_protocol import merge_evidence
 
 
 def put_tensor_cpu(data_dict):
@@ -188,6 +189,26 @@ class EnvWorker(Worker):
                 dones.unsqueeze(1).repeat(1, self.cfg.actor.model.num_action_chunks)
             )
             self.simulator_list[i].stop_simulator()
+
+    def set_experiment_condition(self, task_id, init_state_id, iteration):
+        """Set a group condition before interact; never reset midway through it."""
+        if (self.cfg.env.train.simulator_type != "libero" or self.stage_num != 1
+                or self._world_size != 1 or self.cfg.env.enable_offload):
+            raise ValueError("FYP conditions require one non-offloaded LIBERO worker/stage")
+        if (self.cfg.algorithm.rollout_epoch != 1 or self.cfg.env.train.auto_reset
+                or self.cfg.env.train.num_group != 1 or self.cfg.env.train.group_size != 8):
+            raise ValueError("FYP conditions require R1/G1/K8 and auto_reset=False")
+        return self.simulator_list[0].set_experiment_condition(task_id, init_state_id, iteration)
+
+    def get_experiment_evidence(self, mode="train"):
+        if mode not in {"train", "eval"}:
+            raise ValueError("Evidence mode must be train or eval")
+        if self.cfg.env.enable_offload:
+            raise ValueError("FYP evidence currently requires non-offloaded environments")
+        simulators = self.simulator_list if mode == "train" else self.eval_simulator_list
+        report = merge_evidence([simulator.get_experiment_evidence() for simulator in simulators])
+        report.update(rank=int(self._rank), stage_count=len(simulators), mode=mode)
+        return report
 
     def env_interact_step(self, chunk_actions: torch.Tensor, stage_id: int) -> Dict:
         """

@@ -111,13 +111,27 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             "use_reference_logits_bc", False
         )
         self.use_cached_bc_logits = cfg.algorithm.get("use_cached_bc_logits", False)
+        self._manifest_replay = bool(cfg.algorithm.get("replay_manifest_path"))
+        self._replay_tasks = None
+        self._replay_stage = None
+        self._replay_verified_files = {}
+        self._replay_profiled = False
+        self._replay_examples_total = 0
+        self._replay_task_examples = {}
+        self.sft_dataset = None
+        self.sft_iterator = None
+        if (self.use_experience_replay and cfg.runner.get("fyp_experiment")
+                and not self._manifest_replay):
+            raise ValueError("FYP experiment ER requires an explicit replay_manifest_path")
+        if self._manifest_replay and (self.use_reference_logits_bc or self.use_cached_bc_logits):
+            raise ValueError("Manifest replay supports expert action CE only")
         self.logits_type = cfg.algorithm.get("logits_type", "processed")
         if self.logits_type not in ["processed", "raw"]:
             raise NotImplementedError(
                 f"returning logits type {self.logits_type} is not implemented"
             )
 
-        if self.use_experience_replay:
+        if self.use_experience_replay and not self._manifest_replay:
             self._init_sft_replay_buffer(use_cached_logits=self.use_cached_bc_logits)
 
         self._preallocated_memory = None
@@ -187,6 +201,130 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         self.sft_iterator = iter(self.sft_dataloader)
         if self._rank == 0:
             print(f"SFT dataset initialized: {len(self.sft_dataset)} samples")
+
+    def set_replay_tasks(self, task_ids, stage):
+        """Admit only runner-authorized past tasks (Joint explicitly admits all).
+
+        No dataset directory is scanned. Empty past-task memory on the first Seq
+        stage is valid and does not create a BC batch or a DataLoader iterator.
+        """
+        if not self.use_experience_replay:
+            return {"enabled": False}
+        if not self._manifest_replay:
+            raise ValueError("Stage-scoped replay requires replay_manifest_path")
+        if self._world_size != 1:
+            raise ValueError("Manifest replay is qualified for a single actor rank only")
+        allowed = [int(task) for task in self.cfg.algorithm.get("replay_allowed_task_ids", [])]
+        tasks = sorted({int(task) for task in task_ids})
+        if not set(tasks) <= set(allowed) or int(stage) < 1:
+            raise ValueError("Invalid replay task eligibility or stage")
+        experiment = self.cfg.runner.get("fyp_experiment")
+        if experiment:
+            sequence = [int(task) for task in experiment.task_ids]
+            if int(stage) > len(sequence):
+                raise ValueError("Replay stage exceeds the declared task sequence")
+            expected = (sequence[:int(stage) - 1]
+                        if str(experiment.method).startswith("seq") else sequence)
+            if tasks != sorted(set(expected)):
+                raise ValueError("Replay task set violates declared sequential/Joint admission")
+        if self._replay_stage != int(stage):
+            self._replay_profiled = False
+        self._replay_stage = int(stage)
+        if tasks != self._replay_tasks:
+            if self.sft_dataset is not None and self.sft_dataset.manifest_memory is not None:
+                self.sft_dataset.manifest_memory.close()
+            self.sft_iterator = None
+            self.sft_dataset = LiberoSFTDataset(
+                cfg=self.cfg, root_dir=None,
+                manifest_path=self.cfg.algorithm.replay_manifest_path,
+                allowed_task_ids=allowed, active_task_ids=tasks,
+                capacity_chunks=int(self.cfg.algorithm.get("replay_capacity_chunks", 512)),
+                seed=int(self.cfg.algorithm.get("replay_seed", self.cfg.actor.seed)),
+                verified_files=self._replay_verified_files,
+            )
+            self._replay_tasks = tasks
+            if len(self.sft_dataset):
+                if len(self.sft_dataset) < self.cfg.actor.micro_batch_size:
+                    raise ValueError("Replay memory is smaller than one actor microbatch")
+                if int(self.cfg.algorithm.get("replay_num_workers", 0)) != 0:
+                    raise ValueError("Stage-scoped replay uses num_workers=0 for deterministic admission")
+                _, processor = get_model_config_and_processor(self.cfg.actor)
+                collate = make_collate_fn(self.cfg, processor,
+                                          torch_dtype_from_precision(self.cfg.actor.model.precision))
+                generator = torch.Generator().manual_seed(
+                    int(self.cfg.algorithm.get("replay_seed", self.cfg.actor.seed)))
+                self.sft_dataloader = DataLoader(
+                    self.sft_dataset, batch_size=self.cfg.actor.micro_batch_size,
+                    shuffle=True, drop_last=True, num_workers=0,
+                    collate_fn=collate, generator=generator)
+                self.sft_iterator = iter(self.sft_dataloader)
+        metadata = {"stage": self._replay_stage, "active_task_ids": tasks,
+                    "manifest": self.cfg.algorithm.replay_manifest_path,
+                    "capacity_chunks": int(self.cfg.algorithm.get("replay_capacity_chunks", 512)),
+                    **self.sft_dataset.memory_summary}
+        if self._rank == 0:
+            print("FYP_REPLAY_MEMORY", json.dumps(metadata), flush=True)
+        return metadata
+
+    def _next_manifest_replay_batch(self):
+        if self._replay_tasks is None:
+            raise RuntimeError("Runner must call set_replay_tasks before manifest ER training")
+        if self.sft_iterator is None or float(self.cfg.algorithm.get("bc_coeff", 0.0)) == 0:
+            return None
+        try:
+            batch = next(self.sft_iterator)
+        except StopIteration:
+            self.sft_iterator = iter(self.sft_dataloader)
+            batch = next(self.sft_iterator)
+        task_ids = batch.pop("_replay_task_ids")
+        sample_ids = batch.pop("_replay_sample_ids")
+        if not set(task_ids) <= set(self._replay_tasks):
+            raise RuntimeError("BC batch contains an unadmitted task")
+        self._replay_pending_ids = (task_ids, sample_ids)
+        return batch
+
+    def _manifest_bc_loss(self, batch, action_token_len):
+        # Independent microbatch forward preserves the batch-1 GRPO numerical
+        # path, and is executed after RL backward so activation graphs do not
+        # coexist on a 24GB GPU.
+        output = self.model(input_ids=batch["input_ids"],
+                            attention_mask=batch["attention_mask"],
+                            pixel_values=batch["pixel_values"],
+                            output_hidden_states=False)
+        logits = output.logits[:, -action_token_len - 1:-1].clone()
+        tokens = torch.as_tensor(compute_action_tokens_from_actions(self.model, batch["actions"]),
+                                 device=logits.device)
+        loss, metrics = behavior_cloning_ce_loss(
+            intermediate_logits=logits, expert_actions_tokens=tokens,
+            bc_coeff=float(self.cfg.algorithm.bc_coeff), vocab_size=self.model.vocab_size,
+            n_action_bins=self.model.config.n_action_bins)
+        if not torch.isfinite(loss):
+            raise RuntimeError("Non-finite expert replay loss")
+        if (not self._replay_profiled
+                and self.cfg.algorithm.get("replay_profile_gradient", True)):
+            parameters = [parameter for parameter in self.model.parameters() if parameter.requires_grad]
+            gradients = torch.autograd.grad(loss, parameters, retain_graph=True, allow_unused=True)
+            used = [gradient for gradient in gradients if gradient is not None]
+            if not used:
+                raise RuntimeError("Expert replay has no trainable gradient")
+            tensor_norms = torch.stack([gradient.detach().float().norm() for gradient in used])
+            norm = tensor_norms.square().sum().sqrt()
+            if not torch.isfinite(norm) or norm <= 0:
+                raise RuntimeError("Expert replay isolated gradient is zero or non-finite")
+            print("FYP_BC_PROFILE", json.dumps({"stage": self._replay_stage,
+                  "weighted_bc_grad_norm": float(norm), "grad_norm": float(norm),
+                  "gradient_tensors": len(used),
+                  "nonzero_gradient_tensors": int((tensor_norms > 0).sum()),
+                  "tokens": tokens.numel(), "samples": len(self._replay_pending_ids[0]),
+                  "task_ids": self._replay_pending_ids[0], "sample_ids": self._replay_pending_ids[1],
+                  "memory_selection_sha256": self.sft_dataset.memory_summary["selection_sha256"]}), flush=True)
+            self._replay_profiled = True
+            del gradients, used
+        task_ids, _ = self._replay_pending_ids
+        self._replay_examples_total += len(task_ids)
+        for task in task_ids:
+            self._replay_task_examples[str(task)] = self._replay_task_examples.get(str(task), 0) + 1
+        return loss, metrics
 
     def init_worker(self):
         if not torch.distributed.is_initialized():
@@ -452,7 +590,8 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                           "groups_kept": int(kept.sum()), "mixed_kept_groups": int((mixed & kept).sum()),
                           "valid_training_steps": int(rollout_batch["loss_mask"].sum())}
                 print("FYP_GRPO_GROUPS", json.dumps(report), flush=True)
-                if report["mixed_kept_groups"] == 0:
+                self._fyp_no_effective_group = report["mixed_kept_groups"] == 0
+                if self._fyp_no_effective_group and not self.cfg.runner.get("fyp_experiment"):
                     raise RuntimeError("No retained group has varied returns; retry a predeclared seed")
 
         return rollout_batch
@@ -466,6 +605,13 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         Compute advantages and returns on the actor side and aggregate
         rollout-level metrics in a distributed-safe way.
         """
+        if (self.cfg.runner.get("fyp_experiment")
+                and getattr(self, "_fyp_no_effective_group", False)):
+            # A masked group has no policy-gradient signal. Preserve the
+            # interaction record without creating 0/0 aggregate metrics.
+            self.rollout_batch["advantages"] = torch.zeros_like(self.rollout_batch["rewards"])
+            self.rollout_batch["returns"] = torch.zeros_like(self.rollout_batch["rewards"])
+            return {"valid_training_steps": 0.0, "mixed_kept_groups": 0.0}
         stage_num = self.cfg.rollout.pipeline_stage_num
         env_world_size = self._component_placement.get_world_size("env")
         actor_world_size = self._component_placement.get_world_size("actor")
@@ -611,6 +757,18 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         Args:
             is_last_step: If True, accumulate Fisher information during backward pass for EWC
         """
+        if (self.cfg.runner.get("fyp_experiment")
+                and getattr(self, "_fyp_no_effective_group", False)):
+            # Declared rule: BC is coupled to a valid RL outer iteration. No
+            # BC-only optimizer steps and no AdamW decay on discarded groups.
+            self.optimizer.zero_grad()
+            report = {"optimizer_steps": 0, "grad_norms": [], "skipped": True,
+                      "reason": "no_retained_mixed_group", "bc_examples": 0}
+            print("FYP_GRPO_UPDATE", json.dumps(report), flush=True)
+            return {"actor/grad_norm": 0.0, "actor/lr": self.optimizer.param_groups[0]["lr"],
+                    "actor/optimizer_steps": 0.0, "actor/skipped_no_effective_group": 1.0,
+                    "fyp_grpo_optimizer_steps": 0, "fyp_grpo_skipped": 1,
+                    "rl/loss": 0.0, "total/loss": 0.0, "bc/examples": 0.0}
         self._deallocate_preallocated_memory()
 
         if self.cfg.actor.get("enable_offload", False):
@@ -685,6 +843,8 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         initial_logprob_errors = []
         grad_norms = []
         num_batches = 0
+        replay_examples_before = self._replay_examples_total
+        rl_gradient_profiled = False
         for _, train_global_batch in tqdm(
             enumerate(rollout_dataloader_iter),
             desc=f"get loss and metrics (rank={self._rank})",
@@ -745,9 +905,11 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
 
                     bc_batch = None
                     if self.use_experience_replay:
-                        bc_batch = next(self.sft_iterator)
-                        for k, v in bc_batch.items():
-                            bc_batch[k] = v.to(f"cuda:{int(os.environ['LOCAL_RANK'])}")
+                        bc_batch = (self._next_manifest_replay_batch() if self._manifest_replay
+                                    else next(self.sft_iterator))
+                        if bc_batch is not None:
+                            for k, v in bc_batch.items():
+                                bc_batch[k] = v.to(f"cuda:{int(os.environ['LOCAL_RANK'])}")
 
                     return_bc_logits = use_ref_logits_bc and bc_batch is not None
                     
@@ -767,7 +929,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                         forward_result = actor_forward(
                             self.model,
                             rl_batch=data,
-                            bc_batch=bc_batch,
+                            bc_batch=None if self._manifest_replay else bc_batch,
                             action_token_len=action_token_len,
                             value_model=True
                             if self.cfg.algorithm.adv_type == "embodied_gae"
@@ -818,7 +980,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                 rl_loss, metrics_data = actor_loss(**kwargs)
 
                 bc_loss, bc_metrics_data = 0.0, {}
-                if self.use_experience_replay:
+                if bc_batch is not None and not self._manifest_replay:
                     if use_ref_logits_bc:
                         if self.use_cached_bc_logits:
                             if self.logits_type == "raw":
@@ -897,7 +1059,25 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                 
                 loss = rl_loss + bc_loss + ewc_loss
                 loss /= self.gradient_accumulation
+                if (verify_update and not rl_gradient_profiled
+                        and bool(data["loss_mask"].any())):
+                    rl_parameters = [parameter for parameter in self.model.parameters()
+                                     if parameter.requires_grad]
+                    rl_grads = torch.autograd.grad(rl_loss, rl_parameters,
+                                                  retain_graph=True, allow_unused=True)
+                    rl_norm = torch.stack([gradient.detach().float().norm().square()
+                                           for gradient in rl_grads if gradient is not None]).sum().sqrt()
+                    if not torch.isfinite(rl_norm) or rl_norm <= 0:
+                        raise RuntimeError("First real GRPO microbatch gradient is zero or non-finite")
+                    print("FYP_GRPO_GRAD", json.dumps({"isolated_rl_grad_norm": float(rl_norm),
+                          "isolated_from_bc": True}), flush=True)
+                    rl_gradient_profiled = True
+                    del rl_grads
                 loss.backward()
+                if self._manifest_replay and bc_batch is not None:
+                    bc_loss, bc_metrics_data = self._manifest_bc_loss(bc_batch, action_token_len)
+                    (bc_loss / self.gradient_accumulation).backward()
+                    loss = loss + bc_loss.detach() / self.gradient_accumulation
                 
                 # Accumulate Fisher information if this is the last step
                 if is_last_step and self.cfg.algorithm.get("use_ewc", False):
@@ -941,10 +1121,21 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
 
         if verify_update:
             print("FYP_GRPO_UPDATE", json.dumps({"optimizer_steps": num_batches, "grad_norms": grad_norms,
-                  "peak_gpu_bytes": torch.cuda.max_memory_allocated()}), flush=True)
+                  "peak_gpu_bytes": torch.cuda.max_memory_allocated(), "skipped": False,
+                  "bc_examples": self._replay_examples_total - replay_examples_before}), flush=True)
             if not any(norm > 0 for norm in grad_norms):
                 raise RuntimeError("GRPO produced no nonzero gradient")
         mean_metric_dict = {key: np.mean(value) for key, value in metrics.items()}
+        mean_metric_dict["actor/optimizer_steps"] = float(num_batches)
+        mean_metric_dict["actor/skipped_no_effective_group"] = 0.0
+        mean_metric_dict["fyp_grpo_optimizer_steps"] = float(num_batches)
+        mean_metric_dict["fyp_grpo_skipped"] = 0.0
+        if self._manifest_replay:
+            mean_metric_dict["bc/examples"] = float(self._replay_examples_total - replay_examples_before)
+            print("FYP_REPLAY_UPDATE", json.dumps({"stage": self._replay_stage,
+                  "examples_this_iteration": self._replay_examples_total - replay_examples_before,
+                  "examples_total": self._replay_examples_total,
+                  "examples_per_task": self._replay_task_examples}), flush=True)
         mean_metric_dict = all_reduce_dict(
             mean_metric_dict, op=torch.distributed.ReduceOp.AVG
         )
@@ -971,7 +1162,8 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                        get_peft_model_state_dict(model, save_embedding_layers=False).items()}
             changed = sum(int(torch.count_nonzero(tensor) > 0)
                           for name, tensor in adapter.items() if ".lora_B." in name)
-            if not changed or not all(torch.isfinite(tensor).all() for tensor in adapter.values()):
+            if ((not changed and not self.cfg.runner.get("fyp_experiment"))
+                    or not all(torch.isfinite(tensor).all() for tensor in adapter.values())):
                 raise RuntimeError("Missing, unchanged, or non-finite LoRA update")
             os.makedirs(save_base_path, exist_ok=True)
             torch.save(adapter, os.path.join(save_base_path, "adapter_model.bin"))
