@@ -231,6 +231,10 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             self._replay_profiled = False
         self._replay_stage = int(stage)
         if tasks != self._replay_tasks:
+            from rlinf.custom.fyp_replay import load_manifest, validate_action_statistics
+            manifest = load_manifest(self.cfg.algorithm.replay_manifest_path, allowed)
+            validate_action_statistics(manifest["normalization"]["action_statistics"],
+                                       self.model.get_action_stats(self.model.unnorm_key))
             if self.sft_dataset is not None and self.sft_dataset.manifest_memory is not None:
                 self.sft_dataset.manifest_memory.close()
             self.sft_iterator = None
@@ -283,6 +287,40 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         self._replay_pending_ids = (task_ids, sample_ids)
         return batch
 
+    def _backward_with_profile(self, loss, profile=False):
+        """Use real backward, including reentrant checkpointed LoRA layers.
+
+        autograd.grad(inputs=parameters) is incompatible with the checkpointing
+        enabled by this model manager. Snapshotting accumulated gradients lets
+        one real backward both measure this contribution and retain the exact
+        optimizer update, without another stochastic forward/backward pass.
+        """
+        if not profile:
+            loss.backward()
+            return None
+        parameters = [parameter for parameter in self.model.parameters() if parameter.requires_grad]
+        previous = [None if parameter.grad is None else parameter.grad.detach().clone()
+                    for parameter in parameters]
+        for parameter in parameters:
+            parameter.grad = None
+        loss.backward()
+        gradients = [parameter.grad for parameter in parameters if parameter.grad is not None]
+        if not gradients:
+            raise RuntimeError("Profiled loss produced no trainable gradient")
+        norms = torch.stack([gradient.detach().float().norm() for gradient in gradients])
+        norm = norms.square().sum().sqrt()
+        result = {"grad_norm": float(norm), "gradient_tensors": len(gradients),
+                  "nonzero_gradient_tensors": int((norms > 0).sum())}
+        for parameter, saved in zip(parameters, previous):
+            if saved is not None:
+                if parameter.grad is None:
+                    parameter.grad = saved
+                else:
+                    parameter.grad.add_(saved)
+        if not torch.isfinite(norm) or norm <= 0:
+            raise RuntimeError("Profiled isolated gradient is zero or non-finite")
+        return result
+
     def _manifest_bc_loss(self, batch, action_token_len):
         # Independent microbatch forward preserves the batch-1 GRPO numerical
         # path, and is executed after RL backward so activation graphs do not
@@ -300,26 +338,17 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             n_action_bins=self.model.config.n_action_bins)
         if not torch.isfinite(loss):
             raise RuntimeError("Non-finite expert replay loss")
-        if (not self._replay_profiled
-                and self.cfg.algorithm.get("replay_profile_gradient", True)):
-            parameters = [parameter for parameter in self.model.parameters() if parameter.requires_grad]
-            gradients = torch.autograd.grad(loss, parameters, retain_graph=True, allow_unused=True)
-            used = [gradient for gradient in gradients if gradient is not None]
-            if not used:
-                raise RuntimeError("Expert replay has no trainable gradient")
-            tensor_norms = torch.stack([gradient.detach().float().norm() for gradient in used])
-            norm = tensor_norms.square().sum().sqrt()
-            if not torch.isfinite(norm) or norm <= 0:
-                raise RuntimeError("Expert replay isolated gradient is zero or non-finite")
+        profile = (not self._replay_profiled
+                   and self.cfg.algorithm.get("replay_profile_gradient", True))
+        profile_data = self._backward_with_profile(loss / self.gradient_accumulation, profile)
+        if profile:
             print("FYP_BC_PROFILE", json.dumps({"stage": self._replay_stage,
-                  "weighted_bc_grad_norm": float(norm), "grad_norm": float(norm),
-                  "gradient_tensors": len(used),
-                  "nonzero_gradient_tensors": int((tensor_norms > 0).sum()),
+                  **profile_data, "gradient_accumulation_divisor": self.gradient_accumulation,
+                  "gradient_scale": "weighted_bc_loss_divided_by_gradient_accumulation",
                   "tokens": tokens.numel(), "samples": len(self._replay_pending_ids[0]),
                   "task_ids": self._replay_pending_ids[0], "sample_ids": self._replay_pending_ids[1],
                   "memory_selection_sha256": self.sft_dataset.memory_summary["selection_sha256"]}), flush=True)
             self._replay_profiled = True
-            del gradients, used
         task_ids, _ = self._replay_pending_ids
         self._replay_examples_total += len(task_ids)
         for task in task_ids:
@@ -1059,24 +1088,18 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                 
                 loss = rl_loss + bc_loss + ewc_loss
                 loss /= self.gradient_accumulation
-                if (verify_update and not rl_gradient_profiled
-                        and bool(data["loss_mask"].any())):
-                    rl_parameters = [parameter for parameter in self.model.parameters()
-                                     if parameter.requires_grad]
-                    rl_grads = torch.autograd.grad(rl_loss, rl_parameters,
-                                                  retain_graph=True, allow_unused=True)
-                    rl_norm = torch.stack([gradient.detach().float().norm().square()
-                                           for gradient in rl_grads if gradient is not None]).sum().sqrt()
-                    if not torch.isfinite(rl_norm) or rl_norm <= 0:
-                        raise RuntimeError("First real GRPO microbatch gradient is zero or non-finite")
-                    print("FYP_GRPO_GRAD", json.dumps({"isolated_rl_grad_norm": float(rl_norm),
+                profile_rl = (verify_update and not rl_gradient_profiled
+                              and bool(data["loss_mask"].any()) and not self.use_ewc
+                              and not (self.use_experience_replay and not self._manifest_replay))
+                profile_data = self._backward_with_profile(loss, profile_rl)
+                if profile_rl:
+                    print("FYP_GRPO_GRAD", json.dumps({"isolated_rl_grad_norm": profile_data["grad_norm"],
+                          "gradient_accumulation_divisor": self.gradient_accumulation,
+                          "gradient_scale": "rl_loss_divided_by_gradient_accumulation",
                           "isolated_from_bc": True}), flush=True)
                     rl_gradient_profiled = True
-                    del rl_grads
-                loss.backward()
                 if self._manifest_replay and bc_batch is not None:
                     bc_loss, bc_metrics_data = self._manifest_bc_loss(bc_batch, action_token_len)
-                    (bc_loss / self.gradient_accumulation).backward()
                     loss = loss + bc_loss.detach() / self.gradient_accumulation
                 
                 # Accumulate Fisher information if this is the last step

@@ -32,15 +32,21 @@ def load_plan(directory):
 
 
 def create(args):
+    import hashlib
+
     root = Path(args.directory).resolve()
     if (root / "plan.json").exists():
         raise FileExistsError("Use a new suite directory; existing experiment plans are immutable")
     if not re.fullmatch(r"[a-f0-9]{40}", args.commit):
         raise ValueError("A full immutable code commit is required")
+    if args.profile not in {"qualification", "core", "stress10"}:
+        raise ValueError("Unknown experiment profile")
     qualification = args.profile == "qualification"
-    tasks = [0, 1] if qualification else [0, 1, 2, 3, 4]
+    stress10 = args.profile == "stress10"
+    tasks = [0, 1] if qualification else list(range(10 if stress10 else 5))
+    methods = ["seq", "seq_er"] if stress10 else ["seq", "joint", "seq_er", "joint_er"]
     seeds = [1234] if qualification else [1234, 2345, 3456]
-    iterations = 1 if qualification else 10
+    iterations = 2 if qualification else 10
     eval_ids = list(range(40, 44 if qualification else 50))
     episodes = len(eval_ids) if qualification else 20
     data = Path(os.environ["FYP_DATA_ROOT"])
@@ -64,6 +70,77 @@ def create(args):
             "object_transfer": {"suite": "libero_object", "adaptation_sft": "not_in_declared_spatial_suite", "all_ancestor_training": "unknown", "online_rl": "never", "bc": "never", "action_statistics": "fixed_spatial_sft_prior"},
         },
     }
+    if stress10:
+        reference_directory = getattr(args, "paired_baseline_suite", None)
+        if not reference_directory:
+            raise ValueError("stress10 requires --paired-baseline-suite pointing to a frozen core plan")
+        reference = load_plan(reference_directory)
+        required = {
+            "profile": "core", "model_revision": REVISION, "dataset_revision": DATA_REVISION,
+            "task_ids": tasks[:5], "iterations_per_task": iterations, "seed_ids": seeds,
+            "train_init_ids": plan["train_init_ids"], "eval_init_ids": eval_ids,
+            "episodes_per_eval_task": episodes, "bc_coeff": plan["bc_coeff"],
+            "replay_capacity_chunks": plan["replay_capacity_chunks"],
+            "empty_grpo_group_rule": plan["empty_grpo_group_rule"],
+            "optimizer_at_task_switch": plan["optimizer_at_task_switch"],
+        }
+        for name, value in required.items():
+            if reference.get(name) != value:
+                raise ValueError(f"Paired baseline disagrees on {name}")
+        reference_pairs = {(run["method"], run["seed"]) for run in reference["runs"]}
+        if any((method, seed) not in reference_pairs for method in methods for seed in seeds):
+            raise ValueError("Paired baseline lacks a required Seq/SeqER seed")
+        repo = Path(__file__).resolve().parents[2]
+        fingerprint_paths = ["examples/embodiment/config/crl_experiment/fyp_spatial_smoke.yaml",
+                             "examples/embodiment/config/env/train/libero_spatial.yaml",
+                             "LIBERO/libero/libero/benchmark/libero_suite_task_map.py"]
+        fingerprints = {name: hashlib.sha256((repo / name).read_bytes()).hexdigest()
+                        for name in fingerprint_paths}
+        normalization = {"unnorm_key": "libero_spatial_no_noops", "model_revision": REVISION,
+                         "statistics_recomputed": False, "baseline_independent_file_hash": "unknown"}
+        model_path = Path(os.environ.get("FYP_MODEL_PATH", str(data / "models/Openvla-oft-SFT-libero-spatial-traj1")))
+        for name in ("config.json", "dataset_statistics.json"):
+            source = model_path / name
+            if not source.is_file():
+                continue
+            content = json.loads(source.read_text())
+            stats = content.get("norm_stats", content).get(normalization["unnorm_key"])
+            if stats and "action" in stats:
+                normalization.update(source_file=name,
+                                     source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+                                     action_statistics_sha256=hashlib.sha256(json.dumps(
+                                         stats["action"], sort_keys=True, separators=(",", ":")).encode()).hexdigest())
+                break
+        del plan["exposure"]["rl_holdout"]
+        plan["evaluation_design"] = {
+            "matrix": "sparse_diagonal_next_task_and_final_plus_stage5_anchors",
+            "distinct_tasks": 10, "training_stages": 10,
+            "nbt_final_available": True, "fwt_available": True,
+            "nbt_time_available": False, "full_task_macro_auc_available": False,
+            "stage5_extra_episodes_per_run": 80, "stage5_extra_episodes_all_runs": 480,
+        }
+        plan["paired_length_comparison"] = {
+            "reference_suite": reference["directory"], "reference_profile": "core",
+            "reference_plan_sha256": hashlib.sha256((Path(reference["directory"]) / "plan.json").read_bytes()).hexdigest(),
+            "reference_commit": reference["commit"], "stress_commit": args.commit,
+            "reference_distinct_tasks": 5, "stress_distinct_tasks": 10,
+            "anchor_task_ids": tasks[:5], "matched_methods": methods, "paired_seeds": seeds,
+            "iterations_per_task": iterations, "policy_env_steps_per_task": iterations * 4096,
+            "initial_state_stream": "fyp_protocol_task_local_seeded_permutation",
+            "train_init_ids": plan["train_init_ids"], "eval_init_ids": eval_ids,
+            "eval_seed": 99001,
+            "evaluation_rng_caveat": "Same IDs and seed; differing panel sizes do not force identical episode RNG streams",
+            "prefix_check": "core stage5 versus stress stage5 on fixed anchors; optional adapter hash, not a gate",
+            "within_run_retention": "stress S[5,j] versus S[10,j], j=0..4, alongside postlearning S[j+1,j]",
+            "cross_length_retention": "core S[5,j] versus stress S[10,j], j=0..4",
+            "extra_policy_env_steps_per_run": 5 * iterations * 4096,
+            "whole_profile_aggregate_budget_is_not_a_controlled_length_comparison": True,
+            "configuration_sha256": fingerprints, "normalization": normalization,
+            "physics_and_action": {"suite": "libero_spatial", "horizon": 512,
+                                   "action_dim": 7, "chunk": 8, "lora_rank": 32,
+                                   "reward_coef": 5.0, "use_rel_reward": True,
+                                   "temperature": 1.6, "action_statistics": "fixed_spatial_sft_prior"},
+        }
 
     def job(key, kind, **fields):
         entry = {"key": key, "kind": kind, "log_dir": str(root / "tasks" / key), **fields}
@@ -88,7 +165,7 @@ def create(args):
         job("oodcheck", "oodcheck")
     evaluation("sft", 0, None)
     for seed in seeds:
-        for method in ["seq", "joint", "seq_er", "joint_er"]:
+        for method in methods:
             run_id = f"{method}_s{seed}"
             training_dir = str(root / "tasks" / f"train_{run_id}")
             run = {"run_id": run_id, "method": method, "seed": seed,
@@ -99,11 +176,15 @@ def create(args):
             job(f"train_{run_id}", "train", run=run)
             for stage in range(1, len(tasks) + 1):
                 checkpoint = str(Path(training_dir) / f"checkpoints/global_step_{stage * iterations}/actor")
-                evaluation(run_id, stage, checkpoint)
+                panel = tasks
+                if stress10 and stage < len(tasks):
+                    panel = tasks[:6] if stage == 5 else [tasks[stage - 1], tasks[stage]]
+                evaluation(run_id, stage, checkpoint, panel=panel)
     # Qualification uses only development variants. The core final variants start
     # after every training/ID evaluation, under a protocol frozen before scores.
-    variants = {"camera_shift": tasks, "object_transfer": [0, 1] if qualification else [3, 4]}
-    if not qualification:
+    variants = {"camera_shift": tasks if qualification else [2, 3, 4],
+                "object_transfer": [0, 1] if qualification else [3, 4]}
+    if not qualification and not stress10:
         variants["rl_holdout"] = [7, 8, 9]
     for variant, panel in variants.items():
         role = "development" if qualification else "final"
@@ -113,6 +194,15 @@ def create(args):
                 checkpoint = str(Path(run["training_dir"]) / f"checkpoints/global_step_{len(tasks) * iterations}/actor")
                 evaluation(run["run_id"], len(tasks), checkpoint, variant, panel, role=role)
     job("gate", "gate")
+    if stress10:
+        plan["planned_cost"] = {
+            "training_policy_env_steps_per_run": len(tasks) * iterations * 4096,
+            "training_policy_env_steps_all_runs": sum(run["expected_policy_env_steps"] for run in plan["runs"]),
+            "evaluation_episodes": sum(len(entry["task_ids"]) * entry["expected_episodes_per_task"]
+                                       for entry in plan["evaluations"]),
+            "settling_reset_and_failure_cost": "recorded separately from policy control steps",
+        }
+        plan["planned_cost"]["evaluation_policy_env_steps"] = plan["planned_cost"]["evaluation_episodes"] * 512
     atomic_json(root / "plan.json", plan)
     print(json.dumps({"directory": str(root), "jobs": len(plan["jobs"]), "runs": len(plan["runs"]), "profile": args.profile}))
 
@@ -135,7 +225,7 @@ def _submit_one(plan, task, dependency):
     command = ["sbatch", "--parsable", f"--partition={os.environ.get('FYP_PARTITION', 'GPU')}",
                "--exclude=4090node1", "--nodes=1", "--ntasks=1",
                f"--cpus-per-task={8 if gpu else 2}",
-               f"--time={'12:00:00' if task['kind'] == 'train' else '04:00:00'}",
+               f"--time={('24:00:00' if plan['profile'] == 'stress10' else '12:00:00') if task['kind'] == 'train' else '04:00:00'}",
                "--kill-on-invalid-dep=yes", f"--chdir={repo}",
                f"--job-name=fyp-{plan['profile'][:4]}-{task['kind']}",
                f"--output={root}/slurm/%j.out", f"--error={root}/slurm/%j.err"]
@@ -247,7 +337,7 @@ def export_evidence(args):
     destination = root / "evidence.tar.gz"
     with tarfile.open(destination, "w:gz") as archive:
         for path in sorted(root.rglob("*")):
-            if path.is_file() and not path.is_symlink() and (path.name in names or (path.suffix == ".png" and path.parent.name == "oodcheck")):
+            if path.is_file() and not path.is_symlink() and (path.name in names or path.name.startswith("experiment_env_rank_") or path.name.startswith("env_rank_") or (path.suffix == ".png" and path.parent.name in {"oodcheck", "plots"})):
                 archive.add(path, arcname=str(path.relative_to(root)))
     print(destination)
 
@@ -329,6 +419,7 @@ def run_task(args):
         subprocess.run([sys.executable, "tools/idac/analyze_experiment.py", str(plan["directory"]), "--strict"], check=True)
         for run in plan["runs"]:
             verify_training(plan, {"run": run, "log_dir": run["training_dir"]})
+        subprocess.run([sys.executable, "tools/idac/plot_experiment.py", str(plan["directory"])], check=True)
     else:
         raise ValueError(task["kind"])
     atomic_json(log_dir / "result.json", {"ok": True, "kind": task["kind"], "commit": plan["commit"], "slurm_job_id": os.environ.get("SLURM_JOB_ID")})
@@ -343,7 +434,7 @@ def launch(command, log_dir, mode):
 
 def prepare_manifest(plan, repo):
     # Exact pinned files are verified before a manifest can enable ER.
-    from huggingface_hub import HfApi
+    from huggingface_hub import HfApi, snapshot_download
     import hashlib
     info = HfApi(endpoint="https://hf-mirror.com").dataset_info(
         "yifengzhu-hf/LIBERO-datasets", revision=DATA_REVISION, files_metadata=True)
@@ -352,7 +443,18 @@ def prepare_manifest(plan, repo):
     sys.path.insert(0, str(repo / "LIBERO/libero/libero/benchmark"))
     from libero_suite_task_map import libero_task_map
     raw_root = Path(os.environ["FYP_DATA_ROOT"]) / "datasets/libero_raw"
-    wanted = {f"libero_spatial/{name}_demo.hdf5" for name in libero_task_map["libero_spatial"][:5]}
+    source_ids = plan["task_ids"] if plan["profile"] == "stress10" else list(range(5))
+    wanted = {f"libero_spatial/{libero_task_map['libero_spatial'][task_id]}_demo.hdf5" for task_id in source_ids}
+    metadata = {entry.rfilename: entry for entry in info.siblings if entry.rfilename in wanted}
+    if set(metadata) != wanted:
+        raise ValueError("Pinned dataset did not provide every required training file")
+    if plan["profile"] == "stress10":
+        missing = sorted(name for name, entry in metadata.items()
+                         if not (raw_root / name).is_file() or (raw_root / name).stat().st_size != entry.size)
+        if missing:
+            snapshot_download(repo_id="yifengzhu-hf/LIBERO-datasets", repo_type="dataset",
+                              revision=DATA_REVISION, endpoint="https://hf-mirror.com",
+                              allow_patterns=missing, local_dir=str(raw_root), max_workers=2)
     verified = []
     for entry in info.siblings:
         if entry.rfilename not in wanted:
@@ -368,8 +470,8 @@ def prepare_manifest(plan, repo):
         if not expected_hash or digest.hexdigest() != expected_hash:
             raise ValueError(f"Replay source hash mismatch: {path}")
         verified.append({"file": entry.rfilename, "sha256": expected_hash, "size": entry.size})
-    if len(verified) != 5:
-        raise ValueError("Dataset did not provide all five allowed training files")
+    if len(verified) != len(wanted):
+        raise ValueError("Dataset did not provide all required training files")
     atomic_json(Path(plan["directory"]) / "dataset_verified.json", {"revision": DATA_REVISION, "files": verified})
     subprocess.run([sys.executable, str(repo / "tools/idac/prepare_replay.py"),
                     "--source-dir", str(raw_root), "--output", plan["replay_manifest_path"],
@@ -414,9 +516,10 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     create_parser = sub.add_parser("create")
     create_parser.add_argument("directory")
-    create_parser.add_argument("--profile", choices=["qualification", "core"], required=True)
+    create_parser.add_argument("--profile", choices=["qualification", "core", "stress10"], required=True)
     create_parser.add_argument("--commit", required=True)
     create_parser.add_argument("--next-suite")
+    create_parser.add_argument("--paired-baseline-suite")
     for name in ["submit", "status", "run-task", "advance", "export"]:
         p = sub.add_parser(name)
         p.add_argument("directory")

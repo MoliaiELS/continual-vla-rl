@@ -43,6 +43,21 @@ def raw_gripper_to_model(value):
     return 1.0 - min(1.0, max(0.0, float(value)))
 
 
+def validate_action_statistics(expected, actual):
+    """Require the runtime tokenizer's quantiles/mask to equal the manifest."""
+    for key in ("q01", "q99"):
+        wanted = tuple(float(value) for value in expected.get(key, []))
+        loaded = tuple(float(value) for value in actual.get(key, []))
+        if len(wanted) != 7 or not all(math.isfinite(value) for value in wanted):
+            raise ValueError(f"Replay manifest has invalid action {key}")
+        if wanted != loaded:
+            raise ValueError(f"Runtime model action {key} differs from replay manifest")
+    wanted_mask = tuple(bool(value) for value in expected.get("mask", [True] * 7))
+    loaded_mask = tuple(bool(value) for value in actual.get("mask", [True] * 7))
+    if len(wanted_mask) != 7 or wanted_mask != loaded_mask:
+        raise ValueError("Runtime model action normalization mask differs from replay manifest")
+
+
 def load_manifest(path, allowed_task_ids):
     path = Path(path)
     if not path.is_absolute():

@@ -7,9 +7,9 @@
 | 训练任务 | Spatial 0、1 | Spatial 0–4 |
 | 方法 | Seq、Joint、Seq+ER、Joint+ER | 同左 |
 | 训练种子 | 1234 | 1234、2345、3456 |
-| 每任务采集周期 | 1 | 10 |
+| 每任务采集周期 | 2 | 10 |
 | 每组与时长 | K8、H512、chunk8 | 同左 |
-| 每运行策略控制预算 | 8,192 | 204,800 |
+| 每运行策略控制预算 | 16,384 | 204,800 |
 | 单次每任务评估轨迹数 | 4 | 20 |
 | 训练初态 | 0–39，按任务独立固定排列 | 同左 |
 | 评估初态 | 40–43 | 40–49，遍历两次 |
@@ -20,7 +20,7 @@
 
 全部方法在无有效混合成功组时同时跳过优化与 BC；已执行环境步仍计入预算。资格验证要求整个运行存在隔离的非零 RL 梯度；ER 还要求隔离的非零 BC 梯度。
 
-资格验证只使用开发任务评估相机变体与 Object 0、1 的基座能力。主对照的末尾才执行冻结的最终评估：Spatial 7–9 的 RL 留出、训练任务上的固定相机偏移，以及 Object 3、4 的跨 suite 迁移。Object 的全预训练历史曝光为 unknown，不能据此称全训练历史未见。所有方法和参数在这些终评之前已经固定。
+资格验证只使用开发任务 0、1 评估相机变体与 Object 0、1 的基座能力。主对照的末尾才执行冻结的最终评估：Spatial 7–9 的 RL 留出、Spatial 2–4 上预留的固定相机偏移，以及 Object 3、4 的跨 suite 迁移。Object 的全预训练历史曝光为 unknown，不能据此称全训练历史未见。所有方法和参数在这些终评之前已经固定。
 
 每批 `plan.json` 记录任务、方法、预算、源代码 commit、模型/数据 revision、曝光类别、路径和完整作业列表。集群实际限制同时提交的作业数量，因此每个成功的 Slurm 作业只提交一个 `afterok` 后继，最多保留当前和后继两个作业，最多同时使用 2 张 4090；任何失败保留非零退出码并阻断后续提交。代码/Conda 在 homes，数据、输出和 Ray 溢写在个人存储目录，不依赖本机常开。
 
@@ -31,10 +31,11 @@
 # 代码修改经审查提交后
 ./tools/remote.ps1 sync
 ./tools/remote.ps1 experiment-tests
-./tools/remote.ps1 experiment-submit qualification -SuiteName 20261104-qualification-v2 -NextSuiteName 20261104-core-v1
-./tools/remote.ps1 experiment-status 20261104-qualification-v2
-# 主对照会在资格 gate 成功后自动启动
-./tools/remote.ps1 experiment-status 20261104-core-v1
+./tools/remote.ps1 experiment-submit qualification -SuiteName 20261104-qualification-v3 -NextSuiteName 20261104-core-v2 -StressSuiteName 20261104-stress10-v1
+./tools/remote.ps1 experiment-status 20261104-qualification-v3
+# 主对照会在资格 gate 成功后自动启动，十任务在主对照完成后启动
+./tools/remote.ps1 experiment-status 20261104-core-v2
+./tools/remote.ps1 experiment-status 20261104-stress10-v1
 ```
 
 当前支持阶段边界保存与独立重载，尚不支持优化器/RNG/预算的完整断点恢复。失败重跑需使用新批次/明确新尝试，保留原日志与已消耗交互；不能覆盖原证据或把失败成本抹去。

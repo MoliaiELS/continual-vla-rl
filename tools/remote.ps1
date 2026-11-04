@@ -1,9 +1,11 @@
 param(
-    [Parameter(Position=0)][ValidateSet('doctor','sync','bootstrap','bootstrap-status','model-download','model-status','rollout','rollout-status','smoke','config','eval-smoke','train-smoke','reload-smoke','status','logs','experiment-inventory','experiment-submit','experiment-status','experiment-tests','experiment-fetch','replay-download')][string]$Command = 'doctor',
+    [Parameter(Position=0)][ValidateSet('doctor','sync','bootstrap','bootstrap-status','model-download','model-status','rollout','rollout-status','smoke','config','eval-smoke','train-smoke','reload-smoke','status','logs','cancel','experiment-inventory','experiment-submit','experiment-status','experiment-logs','experiment-tests','experiment-fetch','replay-download')][string]$Command = 'doctor',
     [Parameter(Position=1)][string]$JobId,
     [string]$SuiteName,
     [string]$Dependency,
-    [string]$NextSuiteName
+    [string]$NextSuiteName,
+    [string]$StressSuiteName,
+    [string]$PairedSuiteName
 )
 $ErrorActionPreference = 'Stop'
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -22,6 +24,32 @@ function Get-Commit {
 $data = $cfg.DataRoot
 $code = $cfg.CodeRoot
 switch ($Command) {
+    'cancel' {
+        if ($JobId -notmatch '^\d+$') { throw 'Specify an explicit numeric job ID' }
+        Invoke-Remote @"
+owner=`$(squeue -h -j '$JobId' -o '%u')
+test `"`$owner`" = `"`$(id -un)`"
+scancel '$JobId'
+echo OWN_JOB_CANCELLED_$JobId
+"@
+    }
+    'experiment-logs' {
+        if ($JobId -notmatch '^[a-zA-Z0-9_-]+$') { throw 'Specify the suite name' }
+        Invoke-Remote @"
+'$($cfg.CondaRoot)/envs/vla_budget_rl/bin/python' - '$data/experiments/$JobId' <<'PY'
+import json
+from pathlib import Path
+import sys
+root=Path(sys.argv[1])
+receipt=json.loads((root/'submission.json').read_text())
+latest=receipt['jobs'][-1]
+print(json.dumps(latest))
+for suffix in ['out','err']:
+    path=root/'slurm'/(latest['job_id']+'.'+suffix)
+    if path.is_file(): print(str(path)+'\n'+path.read_text(errors='replace')[-9000:])
+PY
+"@
+    }
     'experiment-fetch' {
         if ($JobId -notmatch '^[a-zA-Z0-9_-]+$') { throw 'Specify the suite name' }
         $sha = Get-Commit
@@ -51,12 +79,13 @@ python tools/idac/test_replay.py
 python tools/idac/test_rollout_evidence.py
 python tools/idac/test_ood_validation.py
 python tools/idac/test_experiment.py
+python tools/idac/plot_experiment.py --self-test
 python -m py_compile tools/idac/experiment.py rlinf/runners/embodied_runner.py rlinf/runners/embodied_eval_runner.py rlinf/workers/actor/fsdp_actor_worker.py rlinf/workers/env/env_worker.py rlinf/envs/libero/libero_env.py
 bash -n tools/idac/experiment_job.sh
 "@
     }
     'experiment-submit' {
-        if ($JobId -notin @('qualification','core')) { throw 'Specify qualification or core' }
+        if ($JobId -notin @('qualification','core','stress10')) { throw 'Specify qualification, core, or stress10' }
         if (-not $SuiteName) { $SuiteName = (Get-Date -Format 'yyyyMMdd') + '-' + $JobId + '-v1' }
         if ($SuiteName -notmatch '^[a-zA-Z0-9_-]+$') { throw 'Invalid suite name' }
         if ($Dependency -and $Dependency -notmatch '^\d+$') { throw 'Invalid dependency job ID' }
@@ -65,9 +94,22 @@ bash -n tools/idac/experiment_job.sh
         $dependencyArg = if ($Dependency) { "--dependency '$Dependency'" } else { '' }
         $continuationSetup = ''
         $continuationArg = ''
+        $pairedArg = ''
+        if ($JobId -eq 'stress10') {
+            if ($PairedSuiteName -notmatch '^[a-zA-Z0-9_-]+$') { throw 'stress10 requires a valid -PairedSuiteName' }
+            $pairedArg = "--paired-baseline-suite '$data/experiments/$PairedSuiteName'"
+        }
         if ($NextSuiteName) {
             if ($JobId -ne 'qualification' -or $NextSuiteName -notmatch '^[a-zA-Z0-9_-]+$') { throw 'Only qualification can create a named core continuation' }
-            $continuationSetup = "python tools/idac/experiment.py create '$data/experiments/$NextSuiteName' --profile core --commit '$sha'"
+            $stressArg = ''
+            if ($StressSuiteName) {
+                if ($StressSuiteName -notmatch '^[a-zA-Z0-9_-]+$') { throw 'Invalid stress suite name' }
+                $stressArg = "--next-suite '$data/experiments/$StressSuiteName'"
+            }
+            $continuationSetup = "python tools/idac/experiment.py create '$data/experiments/$NextSuiteName' --profile core --commit '$sha' $stressArg"
+            if ($StressSuiteName) {
+                $continuationSetup += "`npython tools/idac/experiment.py create '$data/experiments/$StressSuiteName' --profile stress10 --commit '$sha' --paired-baseline-suite '$data/experiments/$NextSuiteName'"
+            }
             $continuationArg = "--next-suite '$data/experiments/$NextSuiteName'"
         }
         Invoke-Remote @"
@@ -76,7 +118,7 @@ source '$snapshot/tools/idac/env.sh'
 cd '$snapshot'
 export FYP_JOB_REPO='$snapshot' FYP_PARTITION='$($cfg.Partition)'
 $continuationSetup
-python tools/idac/experiment.py create '$data/experiments/$SuiteName' --profile '$JobId' --commit '$sha' $continuationArg
+python tools/idac/experiment.py create '$data/experiments/$SuiteName' --profile '$JobId' --commit '$sha' $continuationArg $pairedArg
 python tools/idac/experiment.py submit '$data/experiments/$SuiteName' $dependencyArg
 "@
     }
@@ -87,7 +129,6 @@ python tools/idac/experiment.py submit '$data/experiments/$SuiteName' $dependenc
         Invoke-Remote @"
 source '$snapshot/tools/idac/env.sh'
 python '$snapshot/tools/idac/experiment.py' status '$data/experiments/$JobId'
-tail -c 1400 '$data/reports/replay-download.log' 2>/dev/null || true
 "@
     }
     'replay-download' {

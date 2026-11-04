@@ -22,18 +22,141 @@ SPEC.loader.exec_module(EXPERIMENT)
 COMMIT = "a" * 40
 
 
-def create_plan(directory, profile, next_suite=None):
+def create_plan(directory, profile, next_suite=None, paired_baseline_suite=None):
     with patch.dict(os.environ, {"FYP_DATA_ROOT": str(Path(directory).parent / "data")}), contextlib.redirect_stdout(io.StringIO()):
         EXPERIMENT.create(argparse.Namespace(directory=str(directory), profile=profile, commit=COMMIT,
-                                             next_suite=str(next_suite) if next_suite else None))
+                                             next_suite=str(next_suite) if next_suite else None,
+                                             paired_baseline_suite=str(paired_baseline_suite) if paired_baseline_suite else None))
     return EXPERIMENT.load_plan(directory)
 
 
 class PlanTests(unittest.TestCase):
+    def test_stress10_sparse_panels_anchor_pairing_and_cost_are_frozen(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            core_directory = Path(temporary) / "core"
+            core = create_plan(core_directory, "core")
+            directory = Path(temporary) / "stress10"
+            stress = create_plan(directory, "stress10", paired_baseline_suite=core_directory)
+            self.assertEqual(stress["task_ids"], list(range(10)))
+            self.assertEqual(len(stress["runs"]), 6)
+            self.assertEqual({run["method"] for run in stress["runs"]}, {"seq", "seq_er"})
+            self.assertEqual({run["seed"] for run in stress["runs"]}, {1234, 2345, 3456})
+            for run in stress["runs"]:
+                self.assertEqual(run["expected_policy_env_steps"], 409600)
+                rows = [entry for entry in stress["evaluations"]
+                        if entry["run_id"] == run["run_id"] and entry["variant"] == "id"]
+                self.assertEqual(len(rows), 10)
+                for entry in rows:
+                    stage = entry["stage"]
+                    expected = list(range(10)) if stage == 10 else list(range(6)) if stage == 5 else [stage - 1, stage]
+                    self.assertEqual(entry["task_ids"], expected)
+                    self.assertEqual(entry["expected_episodes_per_task"], 20)
+                    self.assertEqual(entry["policy_env_steps"], stage * 40960)
+            baseline = next(entry for entry in stress["evaluations"] if entry["run_id"] == "sft" and entry["variant"] == "id")
+            self.assertEqual(baseline["task_ids"], list(range(10)))
+            self.assertFalse(any(entry["variant"] == "rl_holdout" for entry in stress["evaluations"]))
+            self.assertNotIn("rl_holdout", stress["exposure"])
+            for variant, tasks in (("camera_shift", [2, 3, 4]), ("object_transfer", [3, 4])):
+                entries = [entry for entry in stress["evaluations"] if entry["variant"] == variant]
+                self.assertEqual(len(entries), 7)
+                self.assertTrue(all(entry["task_ids"] == tasks and entry["role"] == "final" for entry in entries))
+            pairing = stress["paired_length_comparison"]
+            self.assertEqual(pairing["anchor_task_ids"], list(range(5)))
+            self.assertEqual(pairing["reference_plan_sha256"], hashlib.sha256((core_directory / "plan.json").read_bytes()).hexdigest())
+            self.assertEqual(pairing["extra_policy_env_steps_per_run"], 204800)
+            self.assertFalse(stress["evaluation_design"]["nbt_time_available"])
+            self.assertFalse(stress["evaluation_design"]["full_task_macro_auc_available"])
+            self.assertEqual(stress["planned_cost"]["training_policy_env_steps_all_runs"], 2457600)
+            self.assertEqual(sum(run["expected_policy_env_steps"] for run in core["runs"]), 2457600)
+            self.assertEqual(stress["planned_cost"]["evaluation_episodes"], 4740)
+            self.assertEqual(stress["planned_cost"]["evaluation_policy_env_steps"], 4740 * 512)
+            # Exercise the real analyzer: sparse cells must remain missing,
+            # while all required diagonal/final/next-task cells exist.
+            analysis_spec = importlib.util.spec_from_file_location("stress_analysis_tested", ROOT / "tools/idac/analyze_experiment.py")
+            analysis = importlib.util.module_from_spec(analysis_spec)
+            analysis_spec.loader.exec_module(analysis)
+            matrix, budgets = {}, {}
+            for entry in stress["evaluations"]:
+                if entry["variant"] != "id" or entry["run_id"] not in {"sft", "seq_s1234"}:
+                    continue
+                matrix[str(entry["stage"])] = {str(task): {"success_ever_rate": 0.5, "complete": True}
+                                               for task in entry["task_ids"]}
+                budgets[str(entry["stage"])] = entry["policy_env_steps"]
+            metrics = analysis.continual_metrics(matrix, stress["task_ids"], "success_ever")
+            self.assertTrue(metrics["nbt_final"]["complete"])
+            self.assertTrue(metrics["fwt"]["complete"])
+            self.assertFalse(metrics["nbt_time"]["complete"])
+            self.assertIsNone(metrics["nbt_time"]["value"])
+            auc = analysis.fixed_panel_auc(matrix, budgets, stress["task_ids"], "success_ever", 409600)
+            self.assertFalse(auc["complete"])
+            self.assertIsNone(auc["value"])
+            # Generating stress10 must not retroactively change the core protocol.
+            self.assertIn("rl_holdout", EXPERIMENT.load_plan(core_directory)["exposure"])
+
+    def test_stress10_rejects_absent_or_incompatible_frozen_baseline(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(ValueError, "paired-baseline-suite"):
+                create_plan(Path(temporary) / "missing", "stress10")
+            core_directory = Path(temporary) / "core"
+            core = create_plan(core_directory, "core")
+            core["dataset_revision"] = "b" * 40
+            EXPERIMENT.atomic_json(core_directory / "plan.json", core)
+            with self.assertRaisesRegex(ValueError, "dataset_revision"):
+                create_plan(Path(temporary) / "incompatible", "stress10", paired_baseline_suite=core_directory)
+
+    def test_stress10_downloads_only_missing_pinned_files_then_verifies_every_hash(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            core_directory = Path(temporary) / "core"
+            create_plan(core_directory, "core")
+            plan = create_plan(Path(temporary) / "stress10", "stress10", paired_baseline_suite=core_directory)
+            map_spec = importlib.util.spec_from_file_location("fyp_stress_task_map", ROOT / "LIBERO/libero/libero/benchmark/libero_suite_task_map.py")
+            task_map = importlib.util.module_from_spec(map_spec)
+            map_spec.loader.exec_module(task_map)
+            raw_root = Path(temporary) / "data/datasets/libero_raw"
+            payloads, siblings = {}, []
+            for index, name in enumerate(task_map.libero_task_map["libero_spatial"]):
+                filename = f"libero_spatial/{name}_demo.hdf5"
+                content = f"opaque fixture task {index}".encode()
+                payloads[filename] = content
+                siblings.append(SimpleNamespace(rfilename=filename, size=len(content),
+                                                lfs=SimpleNamespace(sha256=hashlib.sha256(content).hexdigest())))
+                if index < 5:
+                    path = raw_root / filename
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(content)
+            downloads = []
+
+            def download(**kwargs):
+                downloads.append(kwargs)
+                self.assertEqual(kwargs["revision"], EXPERIMENT.DATA_REVISION)
+                self.assertEqual(kwargs["repo_type"], "dataset")
+                self.assertEqual(kwargs["max_workers"], 2)
+                self.assertEqual(kwargs["allow_patterns"], sorted(entry.rfilename for entry in siblings[5:]))
+                for name in kwargs["allow_patterns"]:
+                    (raw_root / name).write_bytes(payloads[name])
+
+            fake_hf = SimpleNamespace(HfApi=lambda **kwargs: SimpleNamespace(dataset_info=lambda *a, **k:
+                                      SimpleNamespace(sha=EXPERIMENT.DATA_REVISION, siblings=siblings)), snapshot_download=download)
+            with patch.dict(sys.modules, {"huggingface_hub": fake_hf}), patch.dict(os.environ, {
+                "FYP_DATA_ROOT": str(Path(temporary) / "data"), "FYP_MODEL_PATH": str(Path(temporary) / "model"),
+            }), patch.object(EXPERIMENT.subprocess, "run") as run:
+                EXPERIMENT.prepare_manifest(plan, ROOT)
+                self.assertEqual(len(downloads), 1)
+                EXPERIMENT.prepare_manifest(plan, ROOT)
+                self.assertEqual(len(downloads), 1)
+                command = run.call_args.args[0]
+                self.assertEqual(command[command.index("--task-ids") + 1], "0,1,2,3,4,5,6,7,8,9")
+                verified = json.loads((Path(plan["directory"]) / "dataset_verified.json").read_text())
+                self.assertEqual(len(verified["files"]), 10)
+                corrupted = raw_root / siblings[0].rfilename
+                corrupted.write_bytes(b"X" * corrupted.stat().st_size)
+                with self.assertRaisesRegex(ValueError, "hash mismatch"):
+                    EXPERIMENT.prepare_manifest(plan, ROOT)
+
     def test_profiles_have_matching_stage_budgets_and_all_checkpoints(self):
         with tempfile.TemporaryDirectory() as temporary:
             for profile, tasks, seed_count, iterations in (
-                ("qualification", [0, 1], 1, 1), ("core", [0, 1, 2, 3, 4], 3, 10),
+                ("qualification", [0, 1], 1, 2), ("core", [0, 1, 2, 3, 4], 3, 10),
             ):
                 with self.subTest(profile=profile):
                     directory = Path(temporary) / profile
@@ -141,7 +264,8 @@ class PlanTests(unittest.TestCase):
                 siblings.append(SimpleNamespace(rfilename=filename, size=len(content),
                                                 lfs=SimpleNamespace(sha256=hashlib.sha256(content).hexdigest())))
             info = SimpleNamespace(sha=EXPERIMENT.DATA_REVISION, siblings=siblings)
-            fake_hf = SimpleNamespace(HfApi=lambda **kwargs: SimpleNamespace(dataset_info=lambda *a, **k: info))
+            fake_hf = SimpleNamespace(HfApi=lambda **kwargs: SimpleNamespace(dataset_info=lambda *a, **k: info),
+                                      snapshot_download=lambda **kwargs: self.fail("Qualification must not add a dataset download"))
             with patch.dict(sys.modules, {"huggingface_hub": fake_hf}), patch.dict(os.environ, {
                 "FYP_DATA_ROOT": str(Path(temporary) / "data"), "FYP_MODEL_PATH": str(Path(temporary) / "model"),
             }), patch.object(EXPERIMENT.subprocess, "run") as run:
@@ -214,7 +338,7 @@ class PlanTests(unittest.TestCase):
             # Hydra flow mappings leave keys unquoted, while values are JSON.
             import re
             parsed = json.loads(re.sub(r"([,{])([A-Za-z_]+):", r'\1"\2":', mapping_text))
-            self.assertEqual(parsed, {"method": "seq", "task_ids": [0, 1], "iterations_per_task": 1,
+            self.assertEqual(parsed, {"method": "seq", "task_ids": [0, 1], "iterations_per_task": 2,
                                       "seed": 1234, "train_init_ids": list(range(40))})
             self.assertIn("algorithm.use_experience_replay=true", command)
             self.assertIn("+algorithm.replay_allowed_task_ids=[0,1]", command)
@@ -227,10 +351,11 @@ class PlanTests(unittest.TestCase):
             task = next(task for task in plan["jobs"] if task["key"] == "train_seq_er_s1234")
             run = task["run"]
             training = Path(run["training_dir"])
-            adapter = training / "checkpoints/global_step_2/actor/adapter_model.bin"
+            steps = len(plan["task_ids"]) * plan["iterations_per_task"]
+            adapter = training / f"checkpoints/global_step_{steps}/actor/adapter_model.bin"
             adapter.parent.mkdir(parents=True)
             adapter.write_bytes(b"fixture weights")
-            Path(run["experiment_log_path"]).write_text('\n'.join(json.dumps({"event": "iteration"}) for _ in range(2)))
+            Path(run["experiment_log_path"]).write_text('\n'.join(json.dumps({"event": "iteration"}) for _ in range(steps)))
             log_path = training / "run_embodiment.log"
             update = "FYP_GRPO_UPDATE " + json.dumps({"optimizer_steps": 8, "grad_norms": [1.0]})
             rl = "FYP_GRPO_GRAD " + json.dumps({"isolated_from_bc": True, "isolated_rl_grad_norm": 0.7})

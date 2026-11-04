@@ -22,7 +22,8 @@ _spec = importlib.util.spec_from_file_location("fyp_replay", REPO / "rlinf/custo
 _replay = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_replay)
 for _name in ("FORMAT", "ManifestReplayMemory", "load_manifest", "memory_summary",
-              "non_noop_indices", "raw_gripper_to_model", "select_memory", "sha256_file"):
+              "non_noop_indices", "raw_gripper_to_model", "select_memory", "sha256_file",
+              "validate_action_statistics"):
     globals()[_name] = getattr(_replay, _name)
 
 try:
@@ -30,6 +31,10 @@ try:
     import numpy as np
 except ImportError:
     h5py = np = None
+try:
+    import torch
+except ImportError:
+    torch = None
 
 
 def entry(task, length=30, file_path=None):
@@ -52,7 +57,7 @@ def actor_probe(namespace):
     actor = next(node for node in tree.body if isinstance(node, ast.ClassDef)
                  and node.name == "EmbodiedFSDPActor")
     methods = [node for node in actor.body if isinstance(node, ast.FunctionDef)
-               and node.name in {"set_replay_tasks", "run_training"}]
+               and node.name in {"set_replay_tasks", "run_training", "_backward_with_profile"}]
     module = ast.Module(body=[ast.ClassDef(name="Probe", bases=[], keywords=[],
                                          body=methods, decorator_list=[])], type_ignores=[])
     exec(compile(ast.fix_missing_locations(module), str(path), "exec"), namespace)
@@ -100,6 +105,17 @@ class MemoryPolicyTests(unittest.TestCase):
             path.write_text(json.dumps(manifest(entry(0), entry(9))), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "outside"):
                 load_manifest(path, [0, 1])
+
+    def test_runtime_statistics_match_is_required_even_if_key_is_identical(self):
+        stats = {"q01": [-1.0] * 6 + [0.0], "q99": [1.0] * 7,
+                 "mask": [True] * 6 + [False]}
+        model = SimpleNamespace(get_action_stats=lambda key: stats)
+        validate_action_statistics(stats, model.get_action_stats("same-key"))
+        wrong_quantiles = {**stats, "q99": [2.0] + [1.0] * 6}
+        with self.assertRaisesRegex(ValueError, "q99"):
+            validate_action_statistics(stats, wrong_quantiles)
+        with self.assertRaisesRegex(ValueError, "mask"):
+            validate_action_statistics(stats, {**stats, "mask": [True] * 7})
 
     def test_noop_filter_matches_bundled_reference(self):
         path = REPO / "openvla-oft/experiments/robot/libero/regenerate_libero_dataset.py"
@@ -181,6 +197,54 @@ class HDF5MemoryTests(unittest.TestCase):
             selected_entry["sha256"] = "0" * 64
             with self.assertRaisesRegex(ValueError, "SHA256"):
                 ManifestReplayMemory(manifest(selected_entry), [0], [0], 2, 8, 0)
+
+
+@unittest.skipIf(torch is None, "Checkpoint gradient fixture requires torch")
+class CheckpointGradientTests(unittest.TestCase):
+    def test_profiled_backward_matches_reentrant_lora_accumulation_and_rng(self):
+        import copy
+        from torch.utils.checkpoint import checkpoint
+
+        class FrozenBaseLoRA(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.base = torch.nn.Linear(3, 3, bias=False)
+                self.base.weight.requires_grad_(False)
+                self.a = torch.nn.Parameter(torch.randn(3, 2))
+                self.b = torch.nn.Parameter(torch.zeros(2, 3))
+                self.dropout = torch.nn.Dropout(.2)
+
+            def block(self, inputs):
+                return self.base(inputs) + self.dropout(inputs) @ self.a @ self.b
+
+            def forward(self, inputs):
+                return checkpoint(self.block, inputs, use_reentrant=True)
+
+        torch.manual_seed(123)
+        original = FrozenBaseLoRA()
+        profiled = copy.deepcopy(original)
+        inputs = [torch.tensor([[.1, .3, .8]], requires_grad=True),
+                  torch.tensor([[.9, .2, .4]], requires_grad=True)]
+        torch.manual_seed(456)
+        for index, values in enumerate(inputs):
+            ((original(values) - .2 * (index + 1)).square().mean() / 4).backward()
+        expected_rng = torch.get_rng_state().clone()
+        Probe = actor_probe({"torch": torch, "json": json})
+        probe = Probe()
+        probe.model = profiled
+        torch.manual_seed(456)
+        for index, values in enumerate(inputs):
+            loss = (profiled(values.detach().clone().requires_grad_(True))
+                    - .2 * (index + 1)).square().mean() / 4
+            result = probe._backward_with_profile(loss, profile=True)
+            self.assertGreater(result["grad_norm"], 0)
+            self.assertGreater(result["nonzero_gradient_tensors"], 0)
+        self.assertTrue(torch.equal(torch.get_rng_state(), expected_rng))
+        for before, after in zip(original.parameters(), profiled.parameters()):
+            if before.requires_grad:
+                torch.testing.assert_close(before.grad, after.grad, rtol=1e-6, atol=1e-7)
+            else:
+                self.assertIsNone(after.grad)
 
 
 if __name__ == "__main__":
