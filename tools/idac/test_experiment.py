@@ -30,6 +30,36 @@ def create_plan(directory, profile, next_suite=None, paired_baseline_suite=None)
     return EXPERIMENT.load_plan(directory)
 
 
+def write_training_fixture(plan, task, bc=False, eligible_update=False):
+    """A finite completed journal with explicit real-update/skip admission."""
+    run = task["run"]
+    training = Path(run["training_dir"])
+    steps = len(plan["task_ids"]) * plan["iterations_per_task"]
+    records = []
+    for index in range(steps):
+        stage = index // plan["iterations_per_task"] + 1
+        active = plan["task_ids"][:stage - 1] if run["method"].startswith("seq") else plan["task_ids"]
+        updated = index == 0 or (eligible_update and index == steps - 1)
+        records.append({"event": "iteration", "outer_step": index + 1, "stage": stage,
+                        "policy_env_steps": (index + 1) * 4096,
+                        "replay": [{"stage": stage, "active_task_ids": active}] if run["method"].endswith("_er") else None,
+                        "training_metrics": {"fyp_grpo_optimizer_steps": 8 if updated else 0,
+                                             "fyp_grpo_skipped": int(not updated), "bc/examples": int(bc and bool(active) and updated)}})
+    records.append({"event": "complete", "outer_step": steps, "policy_env_steps": steps * 4096})
+    training.mkdir(parents=True, exist_ok=True)
+    Path(run["experiment_log_path"]).write_text("\n".join(json.dumps(record) for record in records))
+    for stage in range(1, len(plan["task_ids"]) + 1):
+        adapter = training / f"checkpoints/global_step_{stage * plan['iterations_per_task']}/actor/adapter_model.bin"
+        adapter.parent.mkdir(parents=True, exist_ok=True)
+        adapter.write_bytes(b"fixture weights")
+        (adapter.parent / "adapter_config.json").write_text('{}')
+    update = "FYP_GRPO_UPDATE " + json.dumps({"optimizer_steps": 8, "grad_norms": [1.0], "bc_examples": int(bc)})
+    rl = "FYP_GRPO_GRAD " + json.dumps({"isolated_from_bc": True, "isolated_rl_grad_norm": 0.7})
+    profile = "FYP_BC_PROFILE " + json.dumps({"stage": len(plan["task_ids"]), "grad_norm": 0.8, "nonzero_gradient_tensors": 4, "samples": 1})
+    (training / "run_embodiment.log").write_text(update + "\n" + rl + "\n" + (profile if bc else ""))
+    return records
+
+
 class PlanTests(unittest.TestCase):
     def test_stress10_sparse_panels_anchor_pairing_and_cost_are_frozen(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -331,7 +361,7 @@ class PlanTests(unittest.TestCase):
                 "FYP_REPO": str(ROOT), "FYP_DATA_ROOT": str(data), "FYP_MODEL_PATH": str(data / "model"),
             }), patch.object(EXPERIMENT.subprocess, "check_output", return_value=COMMIT + "\n"), \
                     patch.object(EXPERIMENT.subprocess, "run"), patch.object(EXPERIMENT, "launch") as launch, \
-                    patch.object(EXPERIMENT, "verify_training"):
+                    patch.object(EXPERIMENT, "verify_training", return_value={"rl_verified": True}):
                 EXPERIMENT.run_task(argparse.Namespace(directory=str(directory), key=task["key"]))
             command = launch.call_args.args[0]
             mapping_text = next(arg.split("=", 1)[1] for arg in command if arg.startswith("+runner.fyp_experiment="))
@@ -352,14 +382,11 @@ class PlanTests(unittest.TestCase):
             run = task["run"]
             training = Path(run["training_dir"])
             steps = len(plan["task_ids"]) * plan["iterations_per_task"]
-            adapter = training / f"checkpoints/global_step_{steps}/actor/adapter_model.bin"
-            adapter.parent.mkdir(parents=True)
-            adapter.write_bytes(b"fixture weights")
-            Path(run["experiment_log_path"]).write_text('\n'.join(json.dumps({"event": "iteration"}) for _ in range(steps)))
+            write_training_fixture(plan, task, bc=True, eligible_update=True)
             log_path = training / "run_embodiment.log"
-            update = "FYP_GRPO_UPDATE " + json.dumps({"optimizer_steps": 8, "grad_norms": [1.0]})
+            update = "FYP_GRPO_UPDATE " + json.dumps({"optimizer_steps": 8, "grad_norms": [1.0], "bc_examples": 1})
             rl = "FYP_GRPO_GRAD " + json.dumps({"isolated_from_bc": True, "isolated_rl_grad_norm": 0.7})
-            bc = "FYP_BC_PROFILE " + json.dumps({"grad_norm": 0.8, "nonzero_gradient_tensors": 4, "samples": 1})
+            bc = "FYP_BC_PROFILE " + json.dumps({"stage": 2, "grad_norm": 0.8, "nonzero_gradient_tensors": 4, "samples": 1})
             log_path.write_text(update + "\n" + bc + "\n")
             with self.assertRaisesRegex(RuntimeError, "isolated RL"):
                 EXPERIMENT.verify_training(plan, task)
@@ -368,6 +395,105 @@ class PlanTests(unittest.TestCase):
                 EXPERIMENT.verify_training(plan, task)
             log_path.write_text(update + "\n" + rl + "\n" + bc + "\n")
             EXPERIMENT.verify_training(plan, task)
+
+    def test_unexercised_replay_requires_every_eligible_iteration_to_skip(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            plan = create_plan(Path(temporary) / "qualification", "qualification")
+            task = next(task for task in plan["jobs"] if task["key"] == "train_seq_er_s1234")
+            records = write_training_fixture(plan, task)
+            result = EXPERIMENT.verify_training(plan, task)
+            self.assertEqual(result["bc_status"], "not_exercised")
+            self.assertEqual(result["eligible_replay_iterations"], [3, 4])
+            self.assertEqual(result["replay_eligible_optimizer_iterations"], [])
+            self.assertEqual(result["bc_examples"], 0)
+            journal = Path(task["run"]["experiment_log_path"])
+            bad = json.loads(json.dumps(records))
+            bad[2]["training_metrics"]["fyp_grpo_optimizer_steps"] = 8
+            bad[2]["training_metrics"]["fyp_grpo_skipped"] = 0
+            journal.write_text("\n".join(json.dumps(record) for record in bad))
+            with self.assertRaisesRegex(RuntimeError, "BC gradient"):
+                EXPERIMENT.verify_training(plan, task)
+            bad = json.loads(json.dumps(records))
+            bad[2]["replay"][0]["active_task_ids"] = [0, 1]
+            journal.write_text("\n".join(json.dumps(record) for record in bad))
+            with self.assertRaisesRegex(RuntimeError, "admission"):
+                EXPERIMENT.verify_training(plan, task)
+
+    def test_suite_gate_still_requires_actual_isolated_bc_from_an_er_run(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            plan = create_plan(Path(temporary) / "qualification", "qualification")
+            for task in plan["jobs"]:
+                if task["kind"] == "train":
+                    if task["run"]["method"] == "joint_er":
+                        continue
+                    write_training_fixture(plan, task)
+            joint = next(task for task in plan["jobs"] if task["key"] == "train_joint_er_s1234")
+            # Mock one unexercised classification to isolate the suite-level gate.
+            real = EXPERIMENT.verify_training
+            def validate(plan, task):
+                if task["run"]["method"] == "joint_er":
+                    return {"run_id": task["run"]["run_id"], "bc_status": "not_exercised", "rl_verified": True}
+                return real(plan, task)
+            with patch.object(EXPERIMENT, "verify_training", side_effect=validate), self.assertRaisesRegex(RuntimeError, "Suite did not exercise"):
+                EXPERIMENT.verify_suite_training(plan)
+            write_training_fixture(plan, joint, bc=True, eligible_update=True)
+            result = EXPERIMENT.verify_suite_training(plan)
+            self.assertTrue(result["isolated_bc_verified"])
+            self.assertEqual(next(row for row in result["runs"] if row["run_id"] == "seq_er_s1234")["bc_status"], "not_exercised")
+
+    def test_recovery_preserves_finished_training_and_queues_only_remaining_work(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source_root = Path(temporary) / "old"
+            source = create_plan(source_root, "qualification")
+            first_failed = next(index for index, task in enumerate(source["jobs"]) if task["key"] == "train_seq_er_s1234")
+            submitted = []
+            for index, task in enumerate(source["jobs"][:first_failed + 1]):
+                job_id = str(8000 + index)
+                submitted.append({"key": task["key"], "job_id": job_id, "kind": task["kind"]})
+                log_dir = Path(task["log_dir"])
+                log_dir.mkdir(parents=True, exist_ok=True)
+                if task["kind"] == "train":
+                    write_training_fixture(source, task)
+                elif task["kind"] == "eval":
+                    entry = task["evaluation"]
+                    episodes = [{"task_id": task_id} for task_id in entry["task_ids"]
+                                for _ in range(entry["expected_episodes_per_task"])]
+                    EXPERIMENT.atomic_json(Path(entry["evidence_dir"]) / "eval_summary.json", {"episodes": episodes})
+                elif task["kind"] == "oodcheck":
+                    EXPERIMENT.atomic_json(log_dir / "ood_validation.json", {"verified": True})
+                if index < first_failed:
+                    EXPERIMENT.atomic_json(log_dir / "result.json", {"ok": True, "commit": COMMIT,
+                                          "kind": task["kind"], "slurm_job_id": job_id})
+            EXPERIMENT.atomic_json(source_root / "submission.json", {"jobs": submitted, "complete": False})
+            error = source_root / "slurm" / f"{submitted[-1]['job_id']}.err"
+            error.parent.mkdir()
+            error.write_text("RuntimeError: ER run did not verify an isolated nonzero BC gradient")
+            original_plan = (source_root / "plan.json").read_bytes()
+            original_receipt = (source_root / "submission.json").read_bytes()
+            recovery_root = Path(temporary) / "recovery"
+            args = argparse.Namespace(directory=str(recovery_root), source_suite=str(source_root),
+                                      commit="b" * 40, next_suite=str(Path(temporary) / "newcore"))
+            with patch.dict(os.environ, {"FYP_REPO": str(ROOT)}), patch.object(EXPERIMENT.subprocess, "run") as run, contextlib.redirect_stdout(io.StringIO()):
+                EXPERIMENT.recover(args)
+            self.assertIn("diff", run.call_args.args[0])
+            recovered = EXPERIMENT.load_plan(recovery_root)
+            self.assertEqual(recovered["jobs"][0]["key"], "eval_seq_er_s1234_stage1_id")
+            self.assertEqual(len(recovered["jobs"]), 8)
+            self.assertEqual([task["key"] for task in recovered["jobs"] if task["kind"] == "train"], ["train_joint_er_s1234"])
+            self.assertEqual(recovered["recovery"]["additional_training_policy_env_steps"], 16384)
+            self.assertEqual(len(recovered["recovery"]["retained_tasks"]), 10)
+            runs = {run["run_id"]: run for run in recovered["runs"]}
+            self.assertEqual(runs["seq_er_s1234"]["training_validation"]["bc_status"], "not_exercised")
+            self.assertEqual(runs["seq_er_s1234"]["training_dir"], source["runs"][2]["training_dir"])
+            self.assertTrue(Path(runs["joint_er_s1234"]["training_dir"]).is_relative_to(recovery_root))
+            reused_eval = next(entry for entry in recovered["evaluations"] if entry["run_id"] == "seq_s1234")
+            self.assertTrue(Path(reused_eval["evidence_dir"]).is_relative_to(source_root))
+            pending_eval = next(entry for entry in recovered["evaluations"] if entry["run_id"] == "joint_er_s1234")
+            self.assertTrue(Path(pending_eval["checkpoint"]).is_relative_to(recovery_root))
+            self.assertEqual((source_root / "plan.json").read_bytes(), original_plan)
+            self.assertEqual((source_root / "submission.json").read_bytes(), original_receipt)
+            with self.assertRaises(FileExistsError):
+                EXPERIMENT.recover(args)
 
 
 if __name__ == "__main__":

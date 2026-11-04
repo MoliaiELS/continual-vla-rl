@@ -1,5 +1,5 @@
 param(
-    [Parameter(Position=0)][ValidateSet('doctor','sync','bootstrap','bootstrap-status','model-download','model-status','rollout','rollout-status','smoke','config','eval-smoke','train-smoke','reload-smoke','status','logs','cancel','experiment-inventory','experiment-submit','experiment-status','experiment-logs','experiment-analyze','experiment-tests','experiment-fetch','replay-download')][string]$Command = 'doctor',
+    [Parameter(Position=0)][ValidateSet('doctor','sync','bootstrap','bootstrap-status','model-download','model-status','rollout','rollout-status','smoke','config','eval-smoke','train-smoke','reload-smoke','status','logs','cancel','experiment-inventory','experiment-submit','experiment-recover','experiment-status','experiment-logs','experiment-analyze','experiment-tests','experiment-fetch','report-export','replay-download')][string]$Command = 'doctor',
     [Parameter(Position=1)][string]$JobId,
     [string]$SuiteName,
     [string]$Dependency,
@@ -24,6 +24,67 @@ function Get-Commit {
 $data = $cfg.DataRoot
 $code = $cfg.CodeRoot
 switch ($Command) {
+    'experiment-recover' {
+        foreach ($name in @($JobId,$SuiteName,$NextSuiteName,$StressSuiteName)) {
+            if ($name -notmatch '^[a-zA-Z0-9_-]+$') { throw 'Recovery requires explicit source, qualification, core and stress suite names' }
+        }
+        $sha = Get-Commit
+        $snapshot = "$($cfg.RunCodeRoot)/$sha"
+        Invoke-Remote @"
+source '$snapshot/tools/idac/env.sh'
+cd '$snapshot'
+export FYP_JOB_REPO='$snapshot' FYP_PARTITION='$($cfg.Partition)'
+python tools/idac/experiment.py create '$data/experiments/$NextSuiteName' --profile core --commit '$sha' --next-suite '$data/experiments/$StressSuiteName'
+python tools/idac/experiment.py create '$data/experiments/$StressSuiteName' --profile stress10 --commit '$sha' --paired-baseline-suite '$data/experiments/$NextSuiteName'
+python tools/idac/experiment.py recover '$data/experiments/$SuiteName' --source-suite '$data/experiments/$JobId' --commit '$sha' --next-suite '$data/experiments/$NextSuiteName'
+python tools/idac/experiment.py submit '$data/experiments/$SuiteName'
+"@
+    }
+    'report-export' {
+        if ($JobId -notmatch '^[a-zA-Z0-9_-]+$') { throw 'Specify the suite name' }
+        Invoke-Remote @"
+'$($cfg.CondaRoot)/envs/vla_budget_rl/bin/python' - '$data' '$JobId' <<'PY'
+import datetime,hashlib,json,subprocess,sys,tarfile
+from pathlib import Path
+data=Path(sys.argv[1]); suite=data/'experiments'/sys.argv[2]
+roots=[suite, data/'runs/eval_18977',data/'runs/train_19011',data/'runs/reload_19012']
+files=[]; videos=[]
+names={'experiment.jsonl','eval_summary.json','eval_metrics.json','task.json','result.json','identity.json','command.json','resolved.yaml','plan.json','submission.json','ood_validation.json','run_embodiment.log','eval_embodiment.log','dataset_verified.json','model.snapshot.json'}
+for root in roots:
+    if not root.is_dir(): continue
+    for path in root.rglob('*'):
+        if not path.is_file() or path.is_symlink() or 'checkpoints' in path.parts or 'ray-spill' in path.parts: continue
+        if path.suffix=='.mp4' or path.name in names or path.name.startswith(('env_rank_','experiment_env_rank_')) or (path.parent.name=='slurm' and path.suffix in {'.out','.err'}):
+            if path.stat().st_size>100*1024*1024: continue
+            files.append(path)
+            if path.suffix=='.mp4': videos.append({'path':str(path),'size':path.stat().st_size})
+jobs=['18977','19011','19012']
+receipt=suite/'submission.json'
+if receipt.is_file(): jobs += [entry['job_id'] for entry in json.loads(receipt.read_text())['jobs']]
+accounting=subprocess.check_output(['sacct','-j',','.join(jobs),'-P','--format=JobID,JobName,State,ExitCode,Elapsed,Start,End,NodeList,AllocTRES'],text=True)
+report={'captured_at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'suite':str(suite),'videos':videos,'accounting_psv':accounting,'files':[]}
+archive=data/'reports'/('local-report-'+sys.argv[2]+'.tar.gz')
+with tarfile.open(archive,'w:gz') as output:
+    for path in files:
+        relative=path.relative_to(data)
+        digest=hashlib.sha256(path.read_bytes()).hexdigest()
+        report['files'].append({'path':str(path),'local_relative':str(relative),'size':path.stat().st_size,'sha256':digest})
+        output.add(path,arcname=str(relative))
+manifest=archive.with_suffix('.json')
+manifest.write_text(json.dumps(report,indent=2)+'\n')
+print(json.dumps({'archive':str(archive),'manifest':str(manifest),'files':len(files),'bytes':archive.stat().st_size,'videos':videos}))
+PY
+"@
+        $dest = Join-Path $root '.local/report-build/remote-evidence'
+        New-Item -ItemType Directory -Force -Path $dest | Out-Null
+        & scp -q "$($cfg.SshHost):$data/reports/local-report-$JobId.tar.gz" "$dest/source.tar.gz"
+        if ($LASTEXITCODE -ne 0) { throw 'Report media download failed' }
+        & scp -q "$($cfg.SshHost):$data/reports/local-report-$JobId.tar.json" "$dest/manifest.json"
+        if ($LASTEXITCODE -ne 0) { throw 'Report manifest download failed' }
+        & tar -xf "$dest/source.tar.gz" -C $dest
+        if ($LASTEXITCODE -ne 0) { throw 'Report evidence extraction failed' }
+        Write-Output "REPORT_EVIDENCE $dest"
+    }
     'experiment-analyze' {
         if ($JobId -notmatch '^[a-zA-Z0-9_-]+$') { throw 'Specify the suite name' }
         $sha = Get-Commit

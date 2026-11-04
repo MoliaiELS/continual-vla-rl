@@ -10,6 +10,8 @@ import re
 import subprocess
 import sys
 import tarfile
+import copy
+import hashlib
 
 REVISION = "39e5240e879c80b6cda6b3a83763dad717f5c05d"
 DATA_REVISION = "f13aa24a3da8c43c7225569f28c562979fa0e35a"
@@ -393,7 +395,8 @@ def run_task(args):
                           f"+algorithm.replay_seed={run['seed']}", "+algorithm.replay_num_workers=0",
                           "+algorithm.replay_profile_gradient=True"]
         launch(args_list, log_dir, "train")
-        verify_training(plan, task)
+        validation = verify_training(plan, task)
+        atomic_json(log_dir / "training_validation.json", validation)
     elif task["kind"] == "eval":
         entry = task["evaluation"]
         panel = entry["task_ids"]
@@ -417,8 +420,8 @@ def run_task(args):
             raise RuntimeError(f"Incomplete evaluation: {actual} episodes")
     elif task["kind"] == "gate":
         subprocess.run([sys.executable, "tools/idac/analyze_experiment.py", str(plan["directory"]), "--strict"], check=True)
-        for run in plan["runs"]:
-            verify_training(plan, {"run": run, "log_dir": run["training_dir"]})
+        validations = verify_suite_training(plan)
+        atomic_json(log_dir / "training_validation.json", validations)
         subprocess.run([sys.executable, "tools/idac/plot_experiment.py", str(plan["directory"])], check=True)
     else:
         raise ValueError(task["kind"])
@@ -487,6 +490,10 @@ def verify_training(plan, task):
     expected = len(plan["task_ids"]) * plan["iterations_per_task"]
     if len(iterations) != expected:
         raise RuntimeError(f"Training journal incomplete: {run['run_id']} {len(iterations)}/{expected}")
+    completed = [record for record in records if record.get("event") == "complete"]
+    if (len(completed) != 1 or completed[0].get("outer_step") != expected
+            or completed[0].get("policy_env_steps") != run["expected_policy_env_steps"]):
+        raise RuntimeError("Training journal lacks matching completed budget evidence")
     if not (journal.parent / f"checkpoints/global_step_{expected}/actor/adapter_model.bin").is_file():
         raise RuntimeError("Final adapter missing")
     log = (Path(task["log_dir"]) / "run_embodiment.log").read_text(errors="replace")
@@ -504,11 +511,201 @@ def verify_training(plan, task):
     if not any(entry.get("isolated_from_bc") and math.isfinite(entry["isolated_rl_grad_norm"])
                and entry["isolated_rl_grad_norm"] > 0 for entry in rl_gradients):
         raise RuntimeError("No isolated RL gradient evidence; combined BC gradients cannot certify GRPO")
-    if run["method"].endswith("_er") and not any(
-            math.isfinite(entry["grad_norm"]) and entry["grad_norm"] > 0
-            and entry["nonzero_gradient_tensors"] > 0 and entry["samples"] > 0
-            for entry in bc_profiles):
-        raise RuntimeError("ER run did not verify an isolated nonzero BC gradient")
+    positive_bc_profiles = [entry for entry in bc_profiles
+                            if math.isfinite(entry["grad_norm"]) and entry["grad_norm"] > 0
+                            and entry["nonzero_gradient_tensors"] > 0 and entry["samples"] > 0]
+    bc_verified = bool(positive_bc_profiles)
+    validation = {"run_id": run["run_id"], "rl_verified": True,
+                  "bc_status": "not_requested", "bc_examples": sum(int(entry.get("bc_examples", 0)) for entry in updates)}
+    if run["method"].endswith("_er"):
+        eligible, updated = [], []
+        for record in iterations:
+            metadata = record.get("replay")
+            if isinstance(metadata, dict):
+                metadata = [metadata]
+            if not isinstance(metadata, list) or len(metadata) != 1:
+                raise RuntimeError("ER training lacks unambiguous replay eligibility evidence")
+            active = metadata[0].get("active_task_ids")
+            stage = int(record["stage"])
+            wanted = (plan["task_ids"][:stage - 1]
+                      if run["method"].startswith("seq") else plan["task_ids"])
+            if active is None or sorted(set(active)) != sorted(wanted):
+                raise RuntimeError("ER training journal violates declared task admission")
+            if active:
+                eligible.append(int(record["outer_step"]))
+                metrics = record.get("training_metrics", {})
+                if metrics.get("fyp_grpo_optimizer_steps", 0) > 0:
+                    updated.append(int(record["outer_step"]))
+                elif (metrics.get("fyp_grpo_skipped") != 1
+                      or metrics.get("fyp_grpo_optimizer_steps") != 0
+                      or metrics.get("bc/examples") != 0):
+                    raise RuntimeError("ER empty-group skip lacks matching update/BC accounting")
+        validation.update(eligible_replay_iterations=eligible,
+                          replay_eligible_optimizer_iterations=updated)
+        if bc_verified:
+            updated_stages = {int(record["stage"]) for record in iterations
+                              if record["outer_step"] in updated}
+            if (not updated or not validation["bc_examples"]
+                    or any(entry.get("stage") not in updated_stages for entry in positive_bc_profiles)):
+                raise RuntimeError("BC gradient evidence contradicts replay/update journal")
+            validation["bc_status"] = "verified"
+            validation["bc_profile_stages"] = sorted({entry["stage"] for entry in positive_bc_profiles})
+        elif updated or validation["bc_examples"]:
+            raise RuntimeError("ER run did not verify an isolated nonzero BC gradient")
+        elif plan.get("empty_grpo_group_rule") != "skip_all_optimizer_and_bc_updates_count_all_interaction":
+            raise RuntimeError("Unexercised BC requires an explicit empty-group rule")
+        else:
+            validation.update(bc_status="not_exercised",
+                              reason="Every replay-eligible iteration skipped both GRPO and BC; this is not evidence of ER execution")
+    return validation
+
+
+def verify_suite_training(plan):
+    """An unexercised ER run is a result; the suite still needs real BC proof."""
+    results = [verify_training(plan, {"run": run, "log_dir": run["training_dir"]})
+               for run in plan["runs"]]
+    er_results = [result for result, run in zip(results, plan["runs"])
+                  if run["method"].endswith("_er")]
+    if er_results and not any(result["bc_status"] == "verified" for result in er_results):
+        raise RuntimeError("Suite did not exercise any ER update with isolated nonzero BC gradient")
+    return {"runs": results, "isolated_bc_verified": bool(er_results),
+            "note": "not_exercised runs cannot support claims about ER benefit"}
+
+
+def _file_identity(path):
+    path = Path(path)
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return {"path": str(path), "size": path.stat().st_size, "sha256": digest.hexdigest()}
+
+
+def recover(args):
+    """Derive a new qualification plan, reusing only witnessed immutable artifacts.
+
+    This is workflow recovery, not optimizer/RNG resume. A finished run whose old
+    post-training BC gate rejected an unexercised replay path may be reused only
+    under the explicit skip-both rule. Its old FAILED job is retained verbatim.
+    """
+    root = Path(args.directory).resolve()
+    if (root / "plan.json").exists():
+        raise FileExistsError("Recovery requires a new suite directory")
+    if not re.fullmatch(r"[a-f0-9]{40}", args.commit):
+        raise ValueError("A full immutable recovery code commit is required")
+    source = load_plan(args.source_suite)
+    if source["profile"] != "qualification":
+        raise ValueError("This recovery supports qualification suites only")
+    source_root = Path(source["directory"])
+    critical = ["rlinf/runners/embodied_runner.py", "rlinf/runners/embodied_eval_runner.py",
+                "rlinf/workers/actor/fsdp_actor_worker.py", "rlinf/workers/env/env_worker.py",
+                "rlinf/workers/rollout/hf/huggingface_worker.py", "rlinf/envs/libero/libero_env.py",
+                "rlinf/custom/fyp_replay.py", "rlinf/custom/libero_trajectory_dataset.py",
+                "rlinf/utils/fyp_protocol.py", "rlinf/models", "rlinf/algorithms",
+                "examples/embodiment/config/crl_experiment/fyp_spatial_smoke.yaml",
+                "examples/embodiment/config/crl_experiment/fyp_spatial_eval.yaml",
+                "examples/embodiment/config/env"]
+    repo = Path(os.environ["FYP_REPO"])
+    subprocess.run(["git", "-C", str(repo), "diff", "--quiet", source["commit"], args.commit,
+                    "--", *critical], check=True)
+    receipt = json.loads((source_root / "submission.json").read_text())
+    submitted = {entry["key"]: entry for entry in receipt["jobs"]}
+    retained, pending = [], []
+    validation_by_run = {}
+    for task in source["jobs"]:
+        result_path = Path(task["log_dir"]) / "result.json"
+        outcome = json.loads(result_path.read_text()) if result_path.is_file() else None
+        if outcome and (not outcome.get("ok") or outcome.get("commit") != source["commit"]
+                        or outcome.get("kind") != task["kind"]
+                        or outcome.get("slurm_job_id") != submitted.get(task["key"], {}).get("job_id")):
+            raise ValueError("Source result identity is inconsistent")
+        validation = None
+        if task["kind"] == "train" and task["key"] in submitted:
+            try:
+                validation = verify_training(source, task)
+            except (RuntimeError, FileNotFoundError, KeyError) as error:
+                if outcome:
+                    raise RuntimeError("Previously successful training failed artifact validation") from error
+            if validation and not outcome:
+                old_job = submitted[task["key"]]["job_id"]
+                error_path = source_root / "slurm" / f"{old_job}.err"
+                error_text = error_path.read_text(errors="replace") if error_path.is_file() else ""
+                if (validation["bc_status"] != "not_exercised"
+                        or "ER run did not verify an isolated nonzero BC gradient" not in error_text):
+                    raise ValueError("Unsuccessful source training is not the identified BC gate-only failure")
+            if validation:
+                validation_by_run[task["run"]["run_id"]] = validation
+        reusable = bool(outcome or validation)
+        if reusable and task["kind"] == "eval":
+            entry = task["evaluation"]
+            summary = json.loads((Path(entry["evidence_dir"]) / "eval_summary.json").read_text())
+            episodes = summary.get("episodes", [])
+            counts = {int(task_id): sum(int(ep["task_id"]) == int(task_id) for ep in episodes)
+                      for task_id in entry["task_ids"]}
+            if any(count != entry["expected_episodes_per_task"] for count in counts.values()) or len(episodes) != sum(counts.values()):
+                raise RuntimeError("Completed source evaluation has inconsistent episode counts")
+        if reusable:
+            witness = {"key": task["key"], "kind": task["kind"], "source_log_dir": task["log_dir"],
+                       "source_job": submitted[task["key"]],
+                       "source_result": outcome, "validation": validation,
+                       "classification": "completed_artifacts_after_failed_bc_gate" if not outcome else "completed_task"}
+            files = [result_path] if outcome else []
+            if task["kind"] == "train":
+                files += [Path(task["run"]["experiment_log_path"]), Path(task["log_dir"]) / "run_embodiment.log"]
+                for stage in range(1, len(source["task_ids"]) + 1):
+                    checkpoint = Path(task["log_dir"]) / f"checkpoints/global_step_{stage * source['iterations_per_task']}/actor"
+                    files += [checkpoint / "adapter_model.bin", checkpoint / "adapter_config.json"]
+            elif task["kind"] == "eval":
+                files.append(Path(task["evaluation"]["evidence_dir"]) / "eval_summary.json")
+            elif task["kind"] == "oodcheck":
+                files.append(Path(task["log_dir"]) / "ood_validation.json")
+            witness["artifacts"] = [_file_identity(path) for path in files]
+            retained.append(witness)
+        else:
+            pending.append(copy.deepcopy(task))
+    if not pending or pending[-1]["kind"] != "gate":
+        raise ValueError("Source is already finished or lacks a terminal qualification gate")
+    plan = copy.deepcopy(source)
+    plan.update(directory=str(root), commit=args.commit,
+                created_at=dt.datetime.now(dt.timezone.utc).isoformat(),
+                next_suite=str(Path(args.next_suite).resolve()) if getattr(args, "next_suite", None) else None)
+    rerun_ids = {task["run"]["run_id"] for task in pending if task["kind"] == "train"}
+    run_map = {}
+    for run in plan["runs"]:
+        old_training = run["training_dir"]
+        run["source_training_commit"] = source["commit"] if run["run_id"] not in rerun_ids else args.commit
+        if run["run_id"] in rerun_ids:
+            run["training_dir"] = str(root / "tasks" / f"train_{run['run_id']}")
+            run["experiment_log_path"] = str(Path(run["training_dir"]) / "experiment.jsonl")
+            run_map[old_training] = run["training_dir"]
+        else:
+            run["reused_from_suite"] = str(source_root)
+            run["training_validation"] = validation_by_run[run["run_id"]]
+    evaluation_map = {}
+    for task in pending:
+        task["log_dir"] = str(root / "tasks" / task["key"])
+        if task["kind"] == "train":
+            task["run"] = next(run for run in plan["runs"] if run["run_id"] == task["run"]["run_id"])
+        elif task["kind"] == "eval":
+            entry = task["evaluation"]
+            entry["evidence_dir"] = str(Path(task["log_dir"]) / "evidence")
+            for previous, updated in run_map.items():
+                if entry.get("checkpoint") and Path(entry["checkpoint"]).is_relative_to(Path(previous)):
+                    entry["checkpoint"] = str(Path(updated) / Path(entry["checkpoint"]).relative_to(Path(previous)))
+            evaluation_map[(entry["run_id"], entry["stage"], entry.get("variant", "id"))] = entry
+    plan["evaluations"] = [evaluation_map.get((entry["run_id"], entry["stage"], entry.get("variant", "id")), entry)
+                           for entry in plan["evaluations"]]
+    plan["jobs"] = pending
+    plan["recovery"] = {"kind": "workflow_recovery_not_optimizer_resume", "source_suite": str(source_root),
+                        "source_commit": source["commit"], "source_plan": _file_identity(source_root / "plan.json"),
+                        "source_submission": _file_identity(source_root / "submission.json"),
+                        "retained_tasks": retained,
+                        "critical_training_and_eval_code_unchanged": True,
+                        "additional_training_policy_env_steps": sum(task["run"]["expected_policy_env_steps"] for task in pending if task["kind"] == "train"),
+                        "old_failed_job_status_is_preserved": True}
+    atomic_json(root / "plan.json", plan)
+    print(json.dumps({"directory": str(root), "profile": plan["profile"], "jobs": len(pending),
+                      "retained_tasks": len(retained), "additional_training_policy_env_steps": plan["recovery"]["additional_training_policy_env_steps"]}))
 
 
 def main():
@@ -520,6 +717,11 @@ def main():
     create_parser.add_argument("--commit", required=True)
     create_parser.add_argument("--next-suite")
     create_parser.add_argument("--paired-baseline-suite")
+    recovery_parser = sub.add_parser("recover")
+    recovery_parser.add_argument("directory")
+    recovery_parser.add_argument("--source-suite", required=True)
+    recovery_parser.add_argument("--commit", required=True)
+    recovery_parser.add_argument("--next-suite")
     for name in ["submit", "status", "run-task", "advance", "export"]:
         p = sub.add_parser(name)
         p.add_argument("directory")
@@ -528,7 +730,7 @@ def main():
         if name in {"run-task", "advance"}:
             p.add_argument("key")
     args = parser.parse_args()
-    {"create": create, "submit": submit, "status": status, "run-task": run_task, "advance": advance, "export": export_evidence}[args.command](args)
+    {"create": create, "recover": recover, "submit": submit, "status": status, "run-task": run_task, "advance": advance, "export": export_evidence}[args.command](args)
 
 
 if __name__ == "__main__":
