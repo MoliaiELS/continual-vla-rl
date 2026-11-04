@@ -1,5 +1,5 @@
 param(
-    [Parameter(Position=0)][ValidateSet('doctor','sync','bootstrap','bootstrap-status','model-download','model-status','rollout','rollout-status','smoke','config','eval-smoke','train-smoke','reload-smoke','status','logs','cancel','experiment-inventory','experiment-submit','experiment-status','experiment-logs','experiment-tests','experiment-fetch','replay-download')][string]$Command = 'doctor',
+    [Parameter(Position=0)][ValidateSet('doctor','sync','bootstrap','bootstrap-status','model-download','model-status','rollout','rollout-status','smoke','config','eval-smoke','train-smoke','reload-smoke','status','logs','cancel','experiment-inventory','experiment-submit','experiment-status','experiment-logs','experiment-analyze','experiment-tests','experiment-fetch','replay-download')][string]$Command = 'doctor',
     [Parameter(Position=1)][string]$JobId,
     [string]$SuiteName,
     [string]$Dependency,
@@ -24,6 +24,16 @@ function Get-Commit {
 $data = $cfg.DataRoot
 $code = $cfg.CodeRoot
 switch ($Command) {
+    'experiment-analyze' {
+        if ($JobId -notmatch '^[a-zA-Z0-9_-]+$') { throw 'Specify the suite name' }
+        $sha = Get-Commit
+        $snapshot = "$($cfg.RunCodeRoot)/$sha"
+        Invoke-Remote @"
+source '$snapshot/tools/idac/env.sh'
+python '$snapshot/tools/idac/analyze_experiment.py' '$data/experiments/$JobId'
+python '$snapshot/tools/idac/plot_experiment.py' '$data/experiments/$JobId'
+"@
+    }
     'cancel' {
         if ($JobId -notmatch '^\d+$') { throw 'Specify an explicit numeric job ID' }
         Invoke-Remote @"
