@@ -36,6 +36,7 @@
 ./tools/remote.ps1 config         # 额外导出训练/评估的 resolved config
 ./tools/remote.ps1 eval-smoke     # 模型下载完整后，2 条 SFT 回合
 ./tools/remote.ps1 train-smoke    # SFT 连通性验收后才运行真实 GRPO
+./tools/remote.ps1 reload-smoke 12345 # 用训练作业的 step 1 adapter 独立评估
 ./tools/remote.ps1 status 12345
 ./tools/remote.ps1 logs 12345
 ```
@@ -60,9 +61,9 @@ export TMPDIR=/mnt/slurmfs-4090node3/user_data/yguo704/RLinf/tmp
 依据用户指定的 `IADC server for USER.docx`。代码只能放个人 homes；大文件转到存储节点。登录节点用于安装与调试；超过 30 分钟的 GPU 任务会被清理，所有本项目 GPU 检查也统一走 sbatch。只管理自己的文件和明确 job ID，不安装代理、不改驱动、不用全节点 `ray stop`。
 
 - 2026-11-01 登录盘约剩 47GB，存储节点约剩 4.3TB。初试 Conda 放存储盘，但 NFS 小文件解包约 8 分钟仍未完成 Python 基础包；因此独立 Conda 改放个人 homes 的本地盘，控制安装体积，pip 下载缓存、模型和结果仍放存储根。Conda 小缓存为 `miniforge3/pkgs-vla-budget`，已下载的基础包直接复用。
-- 可见 Slurm 分区为 `GPU`，3090/4090；A100 是单独申请的渲染资源，不在本账号 Slurm 分区。默认请求 1 张 4090、排除登录节点，让 Slurm 选择空闲的计算节点；需要时可在 settings.psd1 固定 Node。本次在 4090node3 完成环境验证，单卡 GRPO 显存可行性仍须 profile。
+- 可见 Slurm 分区为 `GPU`，3090/4090。环境检查和评估请求 1 张 4090，训练检查请求同节点 2 张 4090，均排除登录节点。单卡作业 19006 在训练和采样模型共存时显存不足。双卡将 actor 与 rollout/EGL 分开并同步可训练参数，采样推理每批 2 条，合回原来的 8 条轨迹。
 - 节点 `RealMemory=1`、`SelectTypeParameters=CR_CORE`：`--mem=64G` 会导致不可调度，因此暂不声明内存请求。作业记录物理 RAM 与可用 RAM；这不构成 64GB 内存预留或 cgroup 限额，需管理员修正后才能可靠预约。不得使用 `--mem=0` 独占节点。
-- 保留 Slurm 的 CUDA_VISIBLE_DEVICES，Ray 只登记 1 GPU、8 CPU、2GiB object store，溢写到本次结果目录；独立 `/tmp/fyp_<user>_<job>` 与 `address=local`，不附着已有共享 Ray。2GiB 是工程起点，不是训练已验证最小值。
+- 保留 Slurm 的 CUDA_VISIBLE_DEVICES，Ray 只登记该作业获配 GPU、8 CPU 和 2 GiB object store。溢写到本次结果目录，使用独立 `/tmp/fyp_<user>_<job>` 与 `address=local`。
 - HF 主站当前连接被 reset；先核对合法镜像，不安装代理。模型下载必须固定 snapshot revision 并核对文件，不能把空目录算下载完成。
 
 ## 验收与研究接口
