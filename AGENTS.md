@@ -2,9 +2,9 @@
 
 ## 当前分支：X-VLA 接入准备
 
-- `codex/xvla-integration` 从基线 `f2965db7a1b0c6313ed1ded2575a5ea515e0aea4` 建立；本阶段只整理接口与接入方案。入口为 `docs/xvla/README.md`。
+- `codex/xvla-integration` 从基线 `f2965db7a1b0c6313ed1ded2575a5ea515e0aea4` 建立；当前阶段实际实现并小规模验证 X-VLA。入口为 `docs/xvla/README.md` 和 `CODEX_HANDOFF.md`。
 - 新上游为独立远端 `rlinf-upstream`（`RLinf/RLinf`），参考 commit 固定为 `1bf78980d9339cbc67497eddceb9a1e3a74e2acc`。原 `upstream` 仍指 Simple Recipe 作者仓库，不改其含义。
-- 当前工作树的运行时代码仍是 Simple Recipe；`docs/xvla/reference` 是只读参考源码，不能导入后宣称已迁移到新上游。接入验收尚未完成。
+- 根目录运行时保持 Simple Recipe；新增 `third_party/rlinf` submodule 固定为上述上游 commit，X-VLA 使用该运行时及显式最小补丁，不升级 main/latest。`docs/xvla/reference` 仍是只读参考。每项接入验收以实际日志为准。
 - 本分支通过 Git 推送到 `origin/codex/xvla-integration`；`tools/idac/settings.psd1` 的同步分支已单独设置。现有 `experiment-submit`、模型与 Conda 配置仍属于 OpenVLA 基线，不能用于启动 X-VLA。
 - 原 `fyp/deploy-base` 分支与已提交的远端作业继续作为基线。后续 X-VLA 实现需要独立配置、固定上游版本和模型 revision、专用环境及新的验收记录。
 - 本分支的 X-VLA 准备优先于下述基线部署顺序；服务器使用规范、Git 工作流、真实更新验收和研究计数要求继续适用。
