@@ -1,0 +1,56 @@
+{
+  "repository": "https://github.com/2toinf/X-VLA",
+  "commit": "6c4ecfb8be458ae7c0c96094e4b0add4174f4fe2",
+  "files": [
+    {
+      "path": "models/__init__.py",
+      "upstream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "vendored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "patches": []
+    },
+    {
+      "path": "models/action_hub.py",
+      "upstream_sha256": "6a5f7f878c7d035bcf5b609a9d3db49cd4cb094f970339877364213106acfac4",
+      "vendored_sha256": "6a5f7f878c7d035bcf5b609a9d3db49cd4cb094f970339877364213106acfac4",
+      "patches": []
+    },
+    {
+      "path": "models/configuration_florence2.py",
+      "upstream_sha256": "636766ac49821bd59d9669d309e9427cc8c7cd97b723ca82b6f6ca25da3f7979",
+      "vendored_sha256": "636766ac49821bd59d9669d309e9427cc8c7cd97b723ca82b6f6ca25da3f7979",
+      "patches": []
+    },
+    {
+      "path": "models/configuration_xvla.py",
+      "upstream_sha256": "9dbc4f0d8fb53e7f459617d53844f81764e46785c76f97a5563c95c03a8bf87c",
+      "vendored_sha256": "9dbc4f0d8fb53e7f459617d53844f81764e46785c76f97a5563c95c03a8bf87c",
+      "patches": []
+    },
+    {
+      "path": "models/modeling_florence2.py",
+      "upstream_sha256": "1b5de75734765c268bc0902e7e8ce88e4c5c399b732e5b3a1d75e9c7429038dd",
+      "vendored_sha256": "1b5de75734765c268bc0902e7e8ce88e4c5c399b732e5b3a1d75e9c7429038dd",
+      "patches": []
+    },
+    {
+      "path": "models/modeling_xvla.py",
+      "upstream_sha256": "f42ee52a4833f60656becdc5f26dbc3edd19656f8febcae7147a7d6c5860560a",
+      "vendored_sha256": "f4c2efa38ee324fb1e16aa59312a34947464fc34feb19a1aa774d18d689d7e30",
+      "patches": [
+        "defer optional HTTP-only imports; numerical model unchanged"
+      ]
+    },
+    {
+      "path": "models/processing_xvla.py",
+      "upstream_sha256": "74dedf897fdbd7d5e358a7e7ecb87cce1e80249b58c8abd6ca6c35c02a3f395b",
+      "vendored_sha256": "74dedf897fdbd7d5e358a7e7ecb87cce1e80249b58c8abd6ca6c35c02a3f395b",
+      "patches": []
+    },
+    {
+      "path": "models/transformer.py",
+      "upstream_sha256": "2363779fc4337b7be96a4c29ec0fc7684ad6eb677b6fd22926dc697d2f3ae0f7",
+      "vendored_sha256": "2363779fc4337b7be96a4c29ec0fc7684ad6eb677b6fd22926dc697d2f3ae0f7",
+      "patches": []
+    }
+  ]
+}

@@ -1,3 +1,4 @@
 [submodule "third_party/rlinf"]
 	path = third_party/rlinf
 	url = https://github.com/RLinf/RLinf.git
+	shallow = true

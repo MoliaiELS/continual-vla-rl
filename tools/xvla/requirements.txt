@@ -1,4 +1,6 @@
 # Dedicated xvla_rlinf environment; never install in vla_budget_rl.
+torch==2.6.0
+torchvision==0.21.0
 transformers==4.51.3
 peft==0.17.1
 timm==1.0.12

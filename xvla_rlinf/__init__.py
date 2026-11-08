@@ -1,0 +1,16 @@
+"""X-VLA extension for the pinned RLinf submodule (not the legacy root)."""
+_registered = False
+
+def register():
+    global _registered
+    if _registered:
+        return
+    from rlinf.models import register_model
+    register_model('xvla', build_model, category='embodied')
+    _registered = True
+
+def build_model(cfg, torch_dtype):
+    from .policy import XVLAPolicy
+    if cfg.get('is_lora', False):
+        raise ValueError('Use xvla.update_scope; RLinf factory LoRA injection must be disabled')
+    return XVLAPolicy.from_checkpoint(cfg, torch_dtype)
