@@ -1,7 +1,7 @@
 @{
     SshHost = 'idac_sever'
     Repository = 'https://github.com/MoliaiELS/continual-vla-rl.git'
-    Branch = 'fyp/deploy-base'
+    Branch = 'codex/xvla-integration' # This branch's sync target; baseline keeps fyp/deploy-base.
     CodeRoot = '/mnt/slurmfs-4090node1/homes/yguo704/RLinf'
     RunCodeRoot = '/mnt/slurmfs-4090node1/homes/yguo704/RLinf-runs'
     DataRoot = '/mnt/slurmfs-4090node3/user_data/yguo704/RLinf'

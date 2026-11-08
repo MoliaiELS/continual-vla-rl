@@ -1,0 +1,137 @@
+{
+  "upstream_repository": "https://github.com/RLinf/RLinf",
+  "upstream_commit": "1bf78980d9339cbc67497eddceb9a1e3a74e2acc",
+  "baseline_commit": "f2965db7a1b0c6313ed1ded2575a5ea515e0aea4",
+  "branch": "codex/xvla-integration",
+  "review_date": "2026-11-08",
+  "runtime_migration_completed": false,
+  "xvla_implementation_completed": false,
+  "files": [
+    {
+      "path": "rlinf/models/__init__.py",
+      "bytes": 13670,
+      "sha256": "74afc8a70a9cb3b80b4975c1be96e1087aaea9e1e61f6762da2dce1c43ff38e5",
+      "url": "https://github.com/RLinf/RLinf/blob/1bf78980d9339cbc67497eddceb9a1e3a74e2acc/rlinf/models/__init__.py"
+    },
+    {
+      "path": "rlinf/models/embodiment/base_policy.py",
+      "bytes": 3112,
+      "sha256": "a673b325688adf4f88c40052b59278fcb5aa095410ca44d7a81ac2a61b4a203c",
+      "url": "https://github.com/RLinf/RLinf/blob/1bf78980d9339cbc67497eddceb9a1e3a74e2acc/rlinf/models/embodiment/base_policy.py"
+    },
+    {
+      "path": "rlinf/models/embodiment/openpi/__init__.py",
+      "bytes": 15921,
+      "sha256": "3d65069336b7fb3a056cbf8cd8f4f63404691414cbf8d2f959c1576b89054bc4",
+      "url": "https://github.com/RLinf/RLinf/blob/1bf78980d9339cbc67497eddceb9a1e3a74e2acc/rlinf/models/embodiment/openpi/__init__.py"
+    },
+    {
+      "path": "rlinf/models/embodiment/openpi/pi0.py",
+      "bytes": 37606,
+      "sha256": "b5d84d0669362a96d5bb4c5cbc4012d74ee8ecbbf6251abb9952f42fc017299d",
+      "url": "https://github.com/RLinf/RLinf/blob/1bf78980d9339cbc67497eddceb9a1e3a74e2acc/rlinf/models/embodiment/openpi/pi0.py"
+    },
+    {
+      "path": "rlinf/models/embodiment/openpi/tasks/rl.py",
+      "bytes": 22495,
+      "sha256": "f779834b551e7b0823b62f273594575918b825016253d4c41c4d09e71d047dc2",
+      "url": "https://github.com/RLinf/RLinf/blob/1bf78980d9339cbc67497eddceb9a1e3a74e2acc/rlinf/models/embodiment/openpi/tasks/rl.py"
+    },
+    {
+      "path": "rlinf/models/embodiment/openpi/tasks/eval.py",
+      "bytes": 7009,
+      "sha256": "ed5378ebd65c2a1948e42238017f10c2542a48b17c5df1c74cffe9d03e7b7231",
+      "url": "https://github.com/RLinf/RLinf/blob/1bf78980d9339cbc67497eddceb9a1e3a74e2acc/rlinf/models/embodiment/openpi/tasks/eval.py"
+    },
+    {
+      "path": "rlinf/models/embodiment/openpi/env_io.py",
+      "bytes": 6017,
+      "sha256": "ba36371be49982fc921cb4bd1a1ec1e7a32f2c3f5eef084be59385f0155b86dc",
+      "url": "https://github.com/RLinf/RLinf/blob/1bf78980d9339cbc67497eddceb9a1e3a74e2acc/rlinf/models/embodiment/openpi/env_io.py"
+    },
+    {
+      "path": "rlinf/workers/actor/embodied_fsdp_actor_worker.py",
+      "bytes": 37787,
+      "sha256": "c648a152e99d7284ed46becad99c47a55bf9f448f51e1ad1c38bd62e41e3a37d",
+      "url": "https://github.com/RLinf/RLinf/blob/1bf78980d9339cbc67497eddceb9a1e3a74e2acc/rlinf/workers/actor/embodied_fsdp_actor_worker.py"
+    },
+    {
+      "path": "rlinf/workers/rollout/hf/huggingface_worker.py",
+      "bytes": 47337,
+      "sha256": "e983592bf32cb49a16e29fb1c602cf3d8544014afa6758cd90a55fd9d30fda4e",
+      "url": "https://github.com/RLinf/RLinf/blob/1bf78980d9339cbc67497eddceb9a1e3a74e2acc/rlinf/workers/rollout/hf/huggingface_worker.py"
+    },
+    {
+      "path": "rlinf/envs/action_utils.py",
+      "bytes": 16993,
+      "sha256": "64ff4501b89b178bbdcf17ed76219d4d3075f9ba18dd7a86efdd939ae6be28cd",
+      "url": "https://github.com/RLinf/RLinf/blob/1bf78980d9339cbc67497eddceb9a1e3a74e2acc/rlinf/envs/action_utils.py"
+    },
+    {
+      "path": "rlinf/hybrid_engines/fsdp/utils.py",
+      "bytes": 48476,
+      "sha256": "a44dbf9eeb39dd34ccf2e92db04de8f90e7e42f552ae6918f9acde6a8c35b446",
+      "url": "https://github.com/RLinf/RLinf/blob/1bf78980d9339cbc67497eddceb9a1e3a74e2acc/rlinf/hybrid_engines/fsdp/utils.py"
+    },
+    {
+      "path": "rlinf/hybrid_engines/fsdp/fsdp_model_manager.py",
+      "bytes": 29762,
+      "sha256": "c7fe3719fcfbb17646e3b51a7bb666dd287043c22990edecd750e0b2d5e58e03",
+      "url": "https://github.com/RLinf/RLinf/blob/1bf78980d9339cbc67497eddceb9a1e3a74e2acc/rlinf/hybrid_engines/fsdp/fsdp_model_manager.py"
+    },
+    {
+      "path": "rlinf/hybrid_engines/fsdp/strategy/checkpoint.py",
+      "bytes": 8154,
+      "sha256": "d754a4ea03e07a436e3782d2aaab521b982320bac828b02c7794deafb10c0faa",
+      "url": "https://github.com/RLinf/RLinf/blob/1bf78980d9339cbc67497eddceb9a1e3a74e2acc/rlinf/hybrid_engines/fsdp/strategy/checkpoint.py"
+    },
+    {
+      "path": "rlinf/hybrid_engines/weight_syncer/base.py",
+      "bytes": 6977,
+      "sha256": "eec6f71ab30ca92758f8b3cc965cef69dfb2e30e7a107b208f8894e74c5571bc",
+      "url": "https://github.com/RLinf/RLinf/blob/1bf78980d9339cbc67497eddceb9a1e3a74e2acc/rlinf/hybrid_engines/weight_syncer/base.py"
+    },
+    {
+      "path": "rlinf/config.py",
+      "bytes": 107343,
+      "sha256": "c34007d7ab2e7d611fd66a019e6a78e6510e91102622b540cc5d2ca4ecc079f1",
+      "url": "https://github.com/RLinf/RLinf/blob/1bf78980d9339cbc67497eddceb9a1e3a74e2acc/rlinf/config.py"
+    },
+    {
+      "path": "rlinf/data/schema/embodied_types.py",
+      "bytes": 82916,
+      "sha256": "1f3872fdf8db209f7951e3538d476e100ace273436b5a81c266b51fdbd692c29",
+      "url": "https://github.com/RLinf/RLinf/blob/1bf78980d9339cbc67497eddceb9a1e3a74e2acc/rlinf/data/schema/embodied_types.py"
+    },
+    {
+      "path": "rlinf/data/schema/embodied_trajectory.py",
+      "bytes": 37622,
+      "sha256": "9d64fd5802d7ba015aedfc153c878462162ded7f698c787944d7cd0da48898ac",
+      "url": "https://github.com/RLinf/RLinf/blob/1bf78980d9339cbc67497eddceb9a1e3a74e2acc/rlinf/data/schema/embodied_trajectory.py"
+    },
+    {
+      "path": "rlinf/scheduler/cluster/cluster.py",
+      "bytes": 45897,
+      "sha256": "a1f69cc1a2f74c39cd8141b28a1163cf0dd40cecaa184b4e7070b001baea6019",
+      "url": "https://github.com/RLinf/RLinf/blob/1bf78980d9339cbc67497eddceb9a1e3a74e2acc/rlinf/scheduler/cluster/cluster.py"
+    },
+    {
+      "path": "examples/embodiment/config/model/pi0_5.yaml",
+      "bytes": 1098,
+      "sha256": "4c2fe0aa37d86ce42cc05a7edc11df0d49983948558cc5caf0e075969f644eed",
+      "url": "https://github.com/RLinf/RLinf/blob/1bf78980d9339cbc67497eddceb9a1e3a74e2acc/examples/embodiment/config/model/pi0_5.yaml"
+    },
+    {
+      "path": "examples/embodiment/config/libero_spatial_grpo_openpi_pi05.yaml",
+      "bytes": 3467,
+      "sha256": "0f2aacd2d81f6d577b937b40d4aa41b2a23ed6fbe29f6b5f0681318661d8a633",
+      "url": "https://github.com/RLinf/RLinf/blob/1bf78980d9339cbc67497eddceb9a1e3a74e2acc/examples/embodiment/config/libero_spatial_grpo_openpi_pi05.yaml"
+    },
+    {
+      "path": "docs/source-en/rst_source/extending/new_model_fsdp.rst",
+      "bytes": 17768,
+      "sha256": "fc71c4d39b88bbab24408232d5931162222d097c41ba78cc12a70c3ed1584bf2",
+      "url": "https://github.com/RLinf/RLinf/blob/1bf78980d9339cbc67497eddceb9a1e3a74e2acc/docs/source-en/rst_source/extending/new_model_fsdp.rst"
+    }
+  ]
+}
