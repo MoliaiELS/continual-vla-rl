@@ -36,7 +36,10 @@ PY
 '@
  }
  'sync' {
-  if (& git -C $repoRoot status --porcelain) { throw 'Commit current changes before sync' }
+  & git -C $repoRoot diff --quiet
+  if ($LASTEXITCODE -ne 0) { throw 'Commit tracked changes before sync' }
+  & git -C $repoRoot diff --cached --quiet
+  if ($LASTEXITCODE -ne 0) { throw 'Commit staged changes before sync' }
   & git -C $repoRoot push origin HEAD:refs/heads/codex/xvla-integration
   if ($LASTEXITCODE -ne 0) { throw 'Push failed' }
   Invoke-XRemote @"
