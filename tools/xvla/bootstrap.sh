@@ -15,7 +15,7 @@ fi
 # from the NEW prefix: its pinned PEFT/timm/tokenizer requirements are unrelated
 # to X-VLA, and its source tree must never be used by this runtime.
 "$FYP_XVLA_ENV/bin/python" -m pip uninstall -y openvla-oft
-"$FYP_XVLA_ENV/bin/python" -m pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple -r "$repo/tools/xvla/requirements.txt"
+"$FYP_XVLA_ENV/bin/python" -m pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple -c "$repo/tools/xvla/environment.lock.txt" -r "$repo/tools/xvla/requirements.txt"
 "$FYP_XVLA_ENV/bin/python" -m pip freeze > "$FYP_XVLA_DATA/evidence/requirements.freeze.txt"
 "$FYP_XVLA_ENV/bin/python" -m pip check > "$FYP_XVLA_DATA/evidence/pip-check.txt"
 touch "$FYP_XVLA_DATA/evidence/bootstrap.complete"

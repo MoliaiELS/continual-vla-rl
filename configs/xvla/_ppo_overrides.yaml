@@ -78,6 +78,7 @@ actor:
     is_lora: false # extension owns PEFT/prompt scope; no factory double injection
     num_action_chunks: 30
     action_dim: 7
+    pass_predict_mode: true # training rollout reads actor.model; standalone eval reads rollout.model
     logprob_action_dim: 1 # every scalar factor already sums all ten raw coordinates
     add_value_head: true
     xvla:

@@ -179,8 +179,12 @@ class XVLAPolicy(nn.Module, BasePolicy):
             old=forward_inputs['sampled_logprobs'].float()
             if mask is not None:old=torch.where(mask[...,None].bool(),old,0.)
             error=(logprobs.detach()-old).abs().max().item()
+            joint_difference=(logprobs.detach()-old).sum(dim=(1,2))
+            ratio=joint_difference.exp()
             print('XVLA_RECOMPUTE '+json.dumps({'first':self._audit_first_recompute,
-                   'max_abs_logprob_difference':error,'global_step':self.global_step}),flush=True)
+                   'max_abs_logprob_difference':error,'global_step':self.global_step,
+                   'max_abs_chunk_logprob_difference':float(joint_difference.abs().max()),
+                   'chunk_ratio_min':float(ratio.min()),'chunk_ratio_max':float(ratio.max())}),flush=True)
             if self._audit_first_recompute and error>float(self.xcfg.get('logprob_tolerance',1e-3)):
                 raise RuntimeError('Initial actor logprob does not reproduce behavior policy')
             self._audit_first_recompute=False

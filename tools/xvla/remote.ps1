@@ -78,11 +78,12 @@ mkdir -p '$data/logs'
   Invoke-XRemote @"
 tail -c 2500 '$data/logs/bootstrap.log' 2>/dev/null || true
 tail -c 1000 '$data/logs/download-libero.log' 2>/dev/null || true
+tail -c 1000 '$data/logs/download-pt.log' 2>/dev/null || true
 squeue -u "`$(id -un)" -o '%i|%j|%T|%M|%b|%N'
 "@
  }
  'logs' {
   if ($Value -notmatch '^\d+$') { throw 'logs requires job ID' }
-  Invoke-XRemote "tail -c 9000 '$data/logs/$Value.out'; tail -c 2500 '$data/logs/$Value.err'"
+  Invoke-XRemote "if test -f '$data/logs/$Value.out'; then tail -c 9000 '$data/logs/$Value.out'; tail -c 4000 '$data/logs/$Value.err' 2>/dev/null || true; else squeue -j '$Value' -o '%i|%j|%T|%M|%R'; fi"
  }
 }

@@ -401,3 +401,130 @@
              ray.init(
                  address="auto",
                  namespace=Cluster.NAMESPACE,
+--- a/rlinf/scheduler/hardware/accelerators/nvidia_gpu.py
++++ b/rlinf/scheduler/hardware/accelerators/nvidia_gpu.py
+@@ -34,6 +34,49 @@
+     from ...collective import CollectiveGroupOptions
+ 
+ logger = logging.getLogger(__name__)
++
++# Opt-in single-node Slurm allocation namespace. Scheduler placement IDs remain
++# 0..N-1, while CUDA receives the exact original Slurm tokens (indices or UUIDs).
++_XVLA_ALLOCATION_ENV = "RLINF_XVLA_ALLOCATION_CUDA_VISIBLE_DEVICES"
++
++
++def _xvla_parse_cuda_tokens(value: str) -> list[str]:
++    value = value.strip()
++    if value in {"", "-1", "NoDevFiles"}:
++        return []
++    tokens = []
++    for item in value.split(","):
++        token = item.strip()
++        if token.isdecimal():
++            token = str(int(token))
++        elif token.startswith("GPU-") and len(token) > 4 and all(
++            char in "0123456789abcdefABCDEF-" for char in token[4:]
++        ):
++            pass
++        else:
++            raise ValueError(f"Invalid Slurm CUDA_VISIBLE_DEVICES token: {token!r}")
++        if token.lower() in {previous.lower() for previous in tokens}:
++            raise ValueError("Duplicate Slurm CUDA_VISIBLE_DEVICES token")
++        tokens.append(token)
++    return tokens
++
++
++def _xvla_initialize_cuda_visibility() -> None:
++    if os.environ.get("RLINF_XVLA_ISOLATED_RAY") != "1":
++        return
++    # Executed before Ray starts. A CPU-only NodeProbe must inherit the mask
++    # rather than have Ray replace it with an empty CUDA_VISIBLE_DEVICES.
++    os.environ.setdefault(_XVLA_ALLOCATION_ENV, os.environ.get("CUDA_VISIBLE_DEVICES", ""))
++    _xvla_parse_cuda_tokens(os.environ[_XVLA_ALLOCATION_ENV])
++    os.environ["RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"] = "1"
++
++
++def _xvla_allocation_tokens() -> list[str]:
++    _xvla_initialize_cuda_visibility()
++    return _xvla_parse_cuda_tokens(os.environ[_XVLA_ALLOCATION_ENV])
++
++
++_xvla_initialize_cuda_visibility()
+ 
+ # ---------------------------------------------------------------------------
+ # Module-level profiling state — toggled by the runner around gated steps.
+@@ -346,6 +389,9 @@
+     @staticmethod
+     def get_num_devices():
+         """Get the number of NVIDIA GPU devices on the node."""
++        if os.environ.get("RLINF_XVLA_ISOLATED_RAY") == "1":
++            # NVML enumerates physical GPUs beyond CUDA/Slurm visibility.
++            return len(_xvla_allocation_tokens())
+         return NvidiaGPUAcceleratorManager.get_current_node_num_accelerators()
+ 
+     @staticmethod
+@@ -390,6 +436,22 @@
+             Dict[str, str]: A dictionary containing the accelerator environment variables.
+         """
+         env_vars = {}
++        scheduler_ids = list(visible_accelerators)
++        isolated = os.environ.get("RLINF_XVLA_ISOLATED_RAY") == "1"
++        if isolated:
++            allocation = _xvla_allocation_tokens()
++            try:
++                ordinals = [int(item) for item in scheduler_ids]
++            except (ValueError, TypeError) as exc:
++                raise ValueError("X-VLA placement must use allocation-local ordinals") from exc
++            if any(str(index) != str(item) for index, item in zip(ordinals, scheduler_ids)):
++                raise ValueError("X-VLA placement ordinals must be canonical nonnegative integers")
++            if len(set(ordinals)) != len(ordinals) or any(
++                index < 0 or index >= len(allocation) for index in ordinals
++            ):
++                raise ValueError("X-VLA worker placement exceeds its Slurm GPU allocation")
++            visible_accelerators = [allocation[index] for index in ordinals]
++            env_vars[_XVLA_ALLOCATION_ENV] = ",".join(allocation)
+         visible_accelerators_str = ",".join(visible_accelerators)
+ 
+         # All the three types of GPU can be set together
+@@ -403,9 +465,16 @@
+         # through. Falling back to the CUDA device id keeps the previous
+         # behaviour on nodes where the driver cannot be queried.
+         if len(visible_accelerators) > 0 and _renders_with_egl():
+-            cuda_device_id = visible_accelerators[0]
++            # The isolated scheduler speaks allocation-local ordinals; CUDA
++            # environment tokens above may instead be nonzero IDs or UUIDs.
++            cuda_device_id = scheduler_ids[0] if isolated else visible_accelerators[0]
+             egl_device_id = NvidiaGPUManager.get_egl_device_id(cuda_device_id)
+             if egl_device_id is None:
++                if isolated:
++                    raise RuntimeError(
++                        "Cannot map this Slurm-allocated CUDA ordinal to EGL; "
++                        "refusing an unverified rendering GPU fallback"
++                    )
+                 logger.debug(
+                     "No EGL device found for CUDA device %s. Falling back to the "
+                     "CUDA device id, which renders on the wrong GPU when the two "
+@@ -448,6 +517,8 @@
+             driver cannot be queried or does not know this device -- which is the
+             case for GPUs that are not visible to this process.
+         """
++        # get_visible_devices() returns allocation-local scheduler IDs in the
++        # opt-in path, so the existing ordinal-to-EGL query handles UUIDs too.
+         try:
+             cuda_device_id = int(cuda_device_id)
+         except ValueError:
+@@ -459,6 +530,14 @@
+     def get_visible_devices():
+         """Get the visible device IDs."""
+         visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", None)
++        if os.environ.get("RLINF_XVLA_ISOLATED_RAY") == "1":
++            allocation = _xvla_allocation_tokens()
++            current = _xvla_parse_cuda_tokens(visible_devices or "")
++            if any(token not in allocation for token in current):
++                raise ValueError("Current CUDA mask exceeds the preserved Slurm GPU allocation")
++            # Worker._setup_accelerator_info indexes scheduler accelerator_ranks
++            # with these IDs. Returning physical IDs/UUIDs would be incorrect.
++            return [allocation.index(token) for token in current]
+ 
+         if visible_devices is None or visible_devices == "":
+             return []

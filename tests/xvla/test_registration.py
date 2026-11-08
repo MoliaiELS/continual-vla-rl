@@ -68,6 +68,7 @@ class HydraCompositionTests(unittest.TestCase):
         for cfg in (ppo, grpo):
             self.assertEqual(cfg.runner.val_check_interval, 1)
             self.assertEqual(cfg.actor.model.logprob_action_dim, 1)
+            self.assertTrue(cfg.actor.model.pass_predict_mode)
             self.assertTrue(cfg.rollout.model.pass_predict_mode)
             self.assertEqual(cfg.env.train.total_num_envs % cfg.env.train.group_size, 0)
             self.assertEqual(cfg.env.train.max_steps_per_rollout_epoch % cfg.actor.model.num_action_chunks, 0)

@@ -11,20 +11,41 @@ export PYTHONPATH="$runtime:$repo:$repo/LIBERO"
 export RLINF_EXT_MODULE=xvla_rlinf RLINF_RUNTIME="$runtime"
 export HF_HOME="$FYP_XVLA_DATA/cache/huggingface" HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 export RLINF_XVLA_ISOLATED_RAY=1
+export RLINF_XVLA_ALLOCATION_CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-}"
+export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1
 export RAY_TMPDIR="/tmp/xvla_${USER}_${SLURM_JOB_ID}"
 export FYP_XVLA_RAY_SPILL="$FYP_XVLA_DATA/runs/$SLURM_JOB_ID/ray-spill"
-export LIBERO_CONFIG_PATH="$FYP_XVLA_DATA/config/libero"
+export LIBERO_CONFIG_PATH="$FYP_XVLA_DATA/config/libero/$SLURM_JOB_ID"
 export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl
 export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4 TF_NUM_INTEROP_THREADS=1 TF_NUM_INTRAOP_THREADS=1
 export TOKENIZERS_PARALLELISM=false PYTHONUNBUFFERED=1
 export XVLA_RUN_DIR="$FYP_XVLA_DATA/runs/$SLURM_JOB_ID"
+export XVLA_ALLOCATED_GPUS="$gpus"
 export XVLA_MODEL_PATH="$FYP_XVLA_DATA/models/X-VLA-Libero--129e71460678"
 export XVLA_PT_MODEL_PATH="$FYP_XVLA_DATA/models/X-VLA-Pt--c1c4a64a7e03"
 mkdir -p "$XVLA_RUN_DIR" "$FYP_XVLA_RAY_SPILL" "$LIBERO_CONFIG_PATH"
+python - "$repo" <<'PY'
+import json,os,sys
+from pathlib import Path
+base=Path(sys.argv[1])/'LIBERO/libero/libero'
+paths={'benchmark_root':str(base),'bddl_files':str(base/'bddl_files'),
+       'init_states':str(base/'init_files'),'assets':str(base/'assets'),
+       'datasets':str(Path(os.environ['FYP_DATA_ROOT'])/'datasets/libero_raw')}
+for value in paths.values():
+    if not Path(value).is_dir():raise FileNotFoundError(value)
+(Path(os.environ['LIBERO_CONFIG_PATH'])/'config.yaml').write_text(json.dumps(paths,indent=2))
+PY
 if [[ "$gpus" != 0 ]]; then : "${CUDA_VISIBLE_DEVICES:?Slurm mask missing}"; fi
 cd "$runtime"
 python "$repo/tools/xvla/apply_runtime_patch.py" --runtime "$runtime"
-python -c 'import sys,rlinf,torch,transformers,peft;print({"python":sys.executable,"rlinf":rlinf.__file__,"torch":torch.__version__,"transformers":transformers.__version__,"peft":peft.__version__})'
+python "$repo/tools/xvla/resource_monitor.py" &
+resource_pid=$!
+trap 'result=$?; kill -TERM "$resource_pid" 2>/dev/null || true; wait "$resource_pid" || true; exit "$result"' EXIT
+python - <<'PY'
+import importlib.util,json,sys,rlinf,torch,transformers,peft
+specs={name:(getattr(importlib.util.find_spec(name),'origin',None)) for name in ['rlinf','transformers','prismatic','libero','xvla_rlinf']}
+print(json.dumps({'python':sys.executable,'imports':specs,'torch':torch.__version__,'transformers':transformers.__version__,'peft':peft.__version__}),flush=True)
+PY
 case "$mode" in
  unit) python -m unittest discover -s "$repo/tests/xvla" -v 2>&1 | tee "$XVLA_RUN_DIR/unit.log" ;;
  imports) python -m xvla_rlinf.smoke imports ;;

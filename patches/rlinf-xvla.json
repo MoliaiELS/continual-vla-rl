@@ -31,7 +31,12 @@
       "path": "rlinf/scheduler/cluster/cluster.py",
       "before_sha256": "a1f69cc1a2f74c39cd8141b28a1163cf0dd40cecaa184b4e7070b001baea6019",
       "after_sha256": "23d883a169f471b3ab2cb329e5c4cccd3fa00d0d0663bf6976570c6e6c166a54"
+    },
+    {
+      "path": "rlinf/scheduler/hardware/accelerators/nvidia_gpu.py",
+      "before_sha256": "05571642b2f5c697f51946b1b9de404f924d530b855b50de937eca89c39e4625",
+      "after_sha256": "8707ecbd3fe7c2fbde7f095e975668cc335f8c44ece817494e5fbea266ad8953"
     }
   ],
-  "patch_sha256": "37771ab24eb0f0eb3749bd0f0aca006c68a52f93e9ff86165bf739da4e0a9e8c"
+  "patch_sha256": "7ce22fdd78a4de6fc3733b918d366428175510a2ea987b75a1c630d4f491a07c"
 }

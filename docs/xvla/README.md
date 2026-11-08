@@ -1,8 +1,8 @@
-# X-VLA 接入准备
+# X-VLA 接入
 
 更新：2026-11-08。分支：`codex/xvla-integration`。
 
-本阶段已经建立独立分支、固定新上游参考版本并梳理模型契约。当前运行时代码仍为 Simple Recipe；模型加载、X-VLA rollout 和 RL 更新均尚未接入。文档中的模板是后续实现设计，不是可执行训练配置。
+本分支已实现独立的 `xvla_rlinf` adapter、固定版本 vendor、SFT/PPO/GRPO 入口及原生计算对照。根目录保留 Simple Recipe；X-VLA 使用 `third_party/rlinf` 的固定运行时。实际验收状态和日志见 [接入审计](../xvla_integration_audit.md)，命令见 [运行手册](../xvla_runbook.md)，概率口径见 [sampler 定义](../xvla_rl_sampler.md)。本页其余接口梳理是接入前的参考记录，不代表实际实验已通过。
 
 | 内容 | 入口 |
 | --- | --- |
@@ -36,6 +36,6 @@ git fetch --filter=blob:none --no-tags rlinf-upstream main
 git cat-file -e '1bf78980d9339cbc67497eddceb9a1e3a74e2acc^{commit}'
 ```
 
-`tools/remote.ps1 sync` 在本分支指向新的同步分支；本阶段没有同步服务器或改变运行作业。原 OpenVLA 的模型目录、Conda 和实验命令仍不是 X-VLA 的部署方案。
+X-VLA 的入口是 `tools/xvla/remote.ps1`，读取同一份项目服务器 settings，并使用独立 `xvla_rlinf` 环境和数据子目录。原 OpenVLA 的模型目录、Conda 和实验命令仍不是 X-VLA 的部署方案。
 
-后续先确定上游运行时采用方式和 X-VLA checkpoint，再实现官方推理对齐。大规模 RL、经验回放及持续学习实验在相应验收之后开展。
+本次仅开展接入及小规模验证。大规模 RL、经验回放及持续学习实验在相应验收之后开展。

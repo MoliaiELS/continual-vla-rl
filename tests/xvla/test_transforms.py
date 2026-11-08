@@ -66,6 +66,22 @@ class RotationTests(unittest.TestCase):
         official = np.array([t.quat2axisangle(t.mat2quat(m)) for m in rotation_6d_to_matrix(six)])
         np.testing.assert_allclose(rotation_6d_to_axis_angle(six), official, atol=2e-6)
 
+    def test_independent_fixed_source_client_final_actions(self):
+        try:
+            from xvla_rlinf.vendor.reference_libero import reference_environment_actions, _flip_agentview
+        except ImportError:
+            self.skipTest("Official client reference requires the real robosuite runtime")
+        rng = np.random.default_rng(91)
+        action = rng.normal(size=(2, 4, 20)).astype(np.float32)
+        action[..., 3:9] = matrix_to_rotation_6d(axis_angle_to_matrix(rng.normal(0, .5, (2, 4, 3))))
+        action[..., 9] = [[.1, .5, .50001, .9], [.9, .50001, .5, .1]]
+        official = reference_environment_actions(action)
+        np.testing.assert_allclose(env_actions_from_model(action, rotation_backend="robosuite"), official,
+                                   atol=1e-6, rtol=1e-6)
+        np.testing.assert_array_equal(official[0, :, -1], [-1, -1, 1, 1])
+        main = np.arange(36, dtype=np.uint8).reshape(3, 4, 3)
+        np.testing.assert_array_equal(_flip_agentview(main), main[::-1, ::-1])
+
 
 class HistoryTests(unittest.TestCase):
     def test_per_environment_history_reset_and_copy(self):
