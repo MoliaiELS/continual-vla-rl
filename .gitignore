@@ -33,3 +33,5 @@ fill_gpu.py
 RLinf-Pi0*
 model/
 /reports/
+!configs/xvla/model/
+!configs/xvla/model/*.yaml

@@ -1,0 +1,10 @@
+# Extension-owned model schema; no OpenPI/OpenVLA builder or optimization knobs.
+model_type: xvla
+model_path: ${oc.env:XVLA_MODEL_PATH}
+precision: fp32
+is_lora: false
+num_action_chunks: 30
+action_dim: 7
+logprob_action_dim: 1
+pass_predict_mode: true
+add_value_head: true
