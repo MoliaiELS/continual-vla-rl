@@ -102,6 +102,13 @@ actor:
   fsdp_config:
     strategy: fsdp
     sharding_strategy: no_shard
+    # One root FSDP unit for the single-rank smoke. A frozen-only root around
+    # a separately wrapped trainable action transformer fails view restoration
+    # in Torch 2.6 when no observation value head trains the root.
+    wrap_policy:
+      transformer_layer_cls_to_wrap: []
+      module_classes_to_wrap: []
+      no_split_names: []
     use_orig_params: true
     gradient_checkpointing: false
     use_liger_kernel: false

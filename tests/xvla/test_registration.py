@@ -58,6 +58,7 @@ class HydraCompositionTests(unittest.TestCase):
                 self.assertFalse(cfg.actor.model.is_lora)
                 self.assertEqual(cfg.actor.model.precision, "fp32")
                 self.assertNotIn('openpi',cfg.actor.model)
+                self.assertEqual(list(cfg.actor.fsdp_config.wrap_policy.transformer_layer_cls_to_wrap),[])
 
     def test_ppo_and_grpo_have_distinct_correct_loss_and_group_contracts(self):
         ppo = compose_config("ppo_smoke")

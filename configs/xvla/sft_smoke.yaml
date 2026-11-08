@@ -51,6 +51,10 @@ actor:
   fsdp_config:
     strategy: fsdp
     sharding_strategy: no_shard
+    wrap_policy:
+      transformer_layer_cls_to_wrap: []
+      module_classes_to_wrap: []
+      no_split_names: []
     use_orig_params: true
     gradient_checkpointing: false
     use_liger_kernel: false
