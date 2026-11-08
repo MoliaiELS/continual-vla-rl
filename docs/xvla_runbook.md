@@ -49,7 +49,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\xvla\remote.ps1 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\xvla\remote.ps1 status
 ```
 
-bootstrap 只在新 prefix 安装 `tools/xvla/requirements.txt`，缓存和证据写个人存储。它运行 `pip check`，失败不创建 complete 标记。完整安装版本以 freeze 为准。下载固定 model repo/revision，只取权重与处理器资产，核对 LFS SHA256 并写 `verified.json`，不执行 HF custom Python。不把空模型目录视为下载完成。
+bootstrap 只在新prefix安装 `requirements.txt`，由 `environment.lock.txt` 约束已有clone的传递依赖；缓存和证据写个人存储。它运行pip check，失败不创建complete标记。下载固定repo/revision，只取权重与processor资产，核对LFS SHA256/Git blob后写verified.json；Xet实际停滞过，现使用有超时/断点续传的HTTP，不执行HF custom Python，不将partial算完成。
 
 安装与下载是 CPU/I/O 操作，可以使用登录节点；所有仿真、长评估、训练统一走下面的 sbatch 入口。不要在登录节点直接运行 alignment、convert 或模型生成。
 
@@ -78,7 +78,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\xvla\remote.ps1 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\xvla\remote.ps1 submit grpo -Gpus 1
 ```
 
-`submit.py` 固定1小时、8 CPU、排除登录节点、申请明确4090卡，并在提交前核查本用户当前 GPU 占用，超过同时2张预算则拒绝。模型/仿真/SFT/PPO/GRPO smoke 要求恰好1GPU，`-Gpus 2` 会显式失败：当前 `actor,env,rollout:all` 是单GPU验收配置，增加GPU将改变worker数和GRPO组分布，不能直接扩展。提交前仍需检查现有 pending/running 作业与个人资源；资源不足应等待或减少独立作业，不停止其他人的作业。
+`submit.py` 固定1小时、8 CPU、排除登录节点，在文件锁内原子核查本用户运行/排队GPU申请，超过2张保守预约预算则拒绝。模型/仿真/SFT/PPO/GRPO smoke要求恰好1GPU，`-Gpus 2`显式失败：`actor,env,rollout:all`增加GPU会改变worker数及GRPO组分布，不能直接扩展。资源不足则等待，不停止他人作业。
 
 convert 默认只抽样1条有效独立演示，自动定位**本项目** raw dataset 下的 task0 HDF5，验证 Hugging Face 下载 receipt 的固定 revision/SHA256，拒绝覆盖已有 converted manifest。manifest 存于 `<新大文件根>/datasets/limited-spatial-task0/manifest.json`。需要其他输出目录/2demo/seed时使用 `submit.py` 明确参数并保留提交收据，不能把帧数当作demo数。转换需真实 delta controller 回放并验证最终成功。
 
@@ -93,6 +93,22 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\xvla\remote.ps1 
 
 查询只读，不向作业发送中断。`logs` 查看 out/err 尾部；完整日志及视频留在运行证据目录。`XVLA_JOB_PASS` 仅在命令成功返回后打印。不能只看到模型加载或shape正确就把真实仿真/训练登记通过。
 
+网络恢复后，先读取本次尚未取回的19353/19354。频繁短连接或VPN不稳定时，可使用单一交互连接串行查询（不会自动激活其他项目环境）：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\xvla\remote.ps1 session
+```
+
+进入该远端shell后，仅先查询，不重复提交：
+
+```bash
+sacct -j 19353,19354 --format=JobID,State,ExitCode,Elapsed -P
+tail -c 6000 "$FYP_XVLA_DATA/logs/19353.out"
+tail -c 6000 "$FYP_XVLA_DATA/logs/19354.out"
+```
+
+完整SFT验收需`optimizer_update`中冻结组未变、`native_checkpoint_roundtrip`及新进程`XVLA_CHECKPOINT_CHECK PASS`；完整GRPO验收需有方差组、actor梯度/参数变化、同步、新rollout、原生及新进程恢复。失败则按该具体错误修复，不能因作业曾RUNNING而填写PASS。
+
 重要验收证据：
 
 - `alignment`：processor逐tensor严格一致、第三视角 image_mask=false、raw action和环境动作误差、真实 horizon 与 dtype。
@@ -104,6 +120,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\xvla\remote.ps1 
 - 资源证据：全作业 wall time、GPU-hours、峰值显存、采样/更新/同步时间、实际policy/settling步、episodes；以作业日志与资源文件为准，未记录不填估计值冒充实测。
 
 少量全胜/全败的 GRPO 组会产生零相对优势；必须报告组内方差和保留比例，不能伪造 advantage 或改奖励掩盖。smoke未提升成功率不等于接入失败；smoke成功也不代表方法有效。
+
+本次默认与σpos=.015探索组均全胜；`grpo_stress`是显式不同的压力探索策略：σpos=.04、σrot=.12、σgrip=.6，8个环境分2组、1次update、global batch80。只用于取得可验的真实相对优势，不是与默认PPO的公平性能比较。19348两组确有方差但FSDP失败；19354为相同条件的封装修复重跑，最终日志待取回。本轮不继续扩大资格搜索。
+
+单卡smoke当前显式空wrap targets，仅保留根FSDP，use_orig_params=true、NO_SHARD/FP32，避免已观察的nested布局view写回失败。它不改变模型计算公式；其新布局真实闭环仍以19354为准。不能将此单卡配置自动外推为已验证多卡/full/LoRA训练。
+
+SFT恢复在原生DCP/data.pt/rng.pt旁保存`xvla_sft_data_state.json`，绑定manifest、seed、rank/world、microbatch、epoch/offset。EpochCursorSampler保存真实epoch及索引cursor；125项测试中的真实TorchData测试覆盖later-epoch全部剩余batch顺序。跨进程完整worker恢复尚未实跑，不能用这项单元替代。
 
 ## 5. 运行时补丁与隔离
 

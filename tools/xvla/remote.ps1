@@ -1,5 +1,5 @@
 param(
-    [Parameter(Position=0)][ValidateSet('audit','sync','bootstrap','download','submit','status','logs')][string]$Command='audit',
+    [Parameter(Position=0)][ValidateSet('audit','sync','bootstrap','download','submit','status','logs','session')][string]$Command='audit',
     [Parameter(Position=1)][string]$Value='unit',
     [ValidateSet('libero','pt')][string]$Model='libero',
     [int]$Gpus=1
@@ -18,6 +18,15 @@ function Invoke-XRemote([string]$Script) {
 $sha=(& git -C $repoRoot rev-parse HEAD).Trim()
 $snapshot="$($settings.RunCodeRoot)/$sha"
 switch ($Command) {
+ 'session' {
+  # One persistent connection for serial diagnostics during unstable VPN links.
+  $initialize=@"
+export FYP_DATA_ROOT='$($settings.DataRoot)' FYP_CONDA_ROOT='$($settings.CondaRoot)' FYP_XVLA_DATA='$data' FYP_XVLA_ENV='$prefix' FYP_XVLA_SNAPSHOT='$snapshot'
+exec bash --noprofile --norc
+"@
+  & ssh -tt -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 $settings.SshHost ($initialize.Replace("`r",''))
+  if ($LASTEXITCODE -ne 0) { throw "X-VLA session failed: $LASTEXITCODE" }
+ }
  'audit' {
   Invoke-XRemote @'
 hostname
@@ -44,8 +53,8 @@ PY
   if ($LASTEXITCODE -ne 0) { throw 'Push failed' }
   Invoke-XRemote @"
 git -C '$($settings.CodeRoot)' fetch origin codex/xvla-integration
-test -e '$snapshot' || git -C '$($settings.CodeRoot)' worktree add --detach '$snapshot' '$sha'
-git -C '$snapshot' submodule update --init third_party/rlinf
+test -e '$snapshot' || git -C '$($settings.CodeRoot)' worktree add --quiet --detach '$snapshot' '$sha'
+git -C '$snapshot' submodule update --quiet --init third_party/rlinf
 test "`$(git -C '$snapshot/third_party/rlinf' rev-parse HEAD)" = 1bf78980d9339cbc67497eddceb9a1e3a74e2acc
 echo 'XVLA_SYNC_OK $sha'
 "@

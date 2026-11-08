@@ -45,7 +45,7 @@ vendor 位于明确命名空间 `xvla_rlinf.vendor.xvla`，保留 Apache-2.0 许
 | Ray | 仅 `RLINF_XVLA_ISOLATED_RAY=1` 时新建本作业 local Ray，object store ≤2GiB、CPU ≤Slurm配额、GPU来自保留的 CUDA mask，临时目录和 spill 独立；不自动连接别人的 Ray |
 | GPU 枚举 | 新增第7处 opt-in 补丁，将 NVML 物理枚举限制到 Slurm 原 mask；placement 使用 allocation-local ordinal，CUDA 保留原数字/UUID token；EGL 必须查询实际映射，不猜测未获配卡 |
 
-参数范围为 `full`、`lora_heads`、`prompt_heads`。三类 prompt/action 子树显式纳入，包括 DomainAwareLinear 的 Embedding；RLinf factory 的二次 LoRA 注入被拒绝。只训练 domain rows 时使用独立 selected-row Parameter 与冻结完整 buffer，其他行不进入 optimizer，因此不会被 AdamW weight decay 或历史动量修改。模型启动打印真实 trainable 清单、数量与 shape；实际梯度覆盖和保存同步仍须真实作业验证。
+参数范围为 `full`、`lora_heads`、`prompt_heads`。三类 prompt/action 子树显式纳入，包括 DomainAwareLinear 的 Embedding；RLinf factory 的二次 LoRA 注入被拒绝。只训练domain rows时使用独立selected-row Parameter与冻结完整buffer，其他行不进入optimizer，因此不受AdamW weight decay或历史动量影响。真实已验证的训练范围见下文；不能把小模型scope单元测试外推为所有大模型范围的训练通过。
 
 本次真实 PPO 的 domain3 prompt/action 可训练参数为 **128,020**；另有观测条件 value head **267,777**，合计 **395,797**。五个 action/prompt 参数张量均有非零 actor 梯度、最大元素改变量约 `1e-6`，weight decay=0、entropy bonus=0。DomainRows 将未选行移为 buffer，因此日志的 `total_parameters` 不包含全部冻结 embedding buffer，不能将它直接当作原模型架构参数总量。`full`/LoRA 的真实大模型训练仍未验收。
 
@@ -88,6 +88,12 @@ RL sampler 为本项目明确命名的 `terminal_clean_gaussian_v1`，在完整�
 | 19343 | FAIL（有效更新门槛） | GRPO回报[1,1,1,1]，方差0，全胜组1，保留率0；拒绝伪造advantage或声称actor更新 |
 | 19344 | PASS | 独立官方参考对照：processor逐tensor严格一致；raw20、sigmoid后、最终7D动作的最大误差均0；FP32/H30/steps10 |
 | 19345 | FAIL（有效更新门槛） | 更强独立探索配置σpos=.015/σrot=.05/σgrip=.3，仍[1,1,1,1]；不是有效GRPO更新 |
+| 19346 | FAIL，已修复审计 | Pt真实SFT已到backward/optimizer；瞬态named_parameters造成image_projection键缺失；改用原生完整state稳定键，不算本次已通过 |
+| 19347 | FAIL，已修复测试 | 115项中1项误断言TorchData私有字段非空；改为核验全部剩余batch与epoch |
+| 19348 | FAIL，封装修复待验 | 压力配置σpos=.04/σrot=.12/σgrip=.6，8回合两组真实回报[0,0,1,1]、[0,1,1,1]，方差.25/.1875；第一次backward后第二次FSDP前向view写回失败，未完成optimizer |
+| 19352 | PASS | 最新125项全部通过、无SKIP；含真实TorchData跨epoch余序列、稳定完整state审计、算法白名单及GPU预算 |
+| 19353 | BLOCKED（取回日志） | 修复后的Pt SFT已提交；后来19354已进入RUNNING，说明19353不再活跃，但不能推断成功/失败；需读取最终日志和checkpoint_check.json |
+| 19354 | BLOCKED（取回日志） | 同一压力配置、单根FSDP重跑；最后确认RUNNING，网络中断后未取得最终日志，不声称更新/恢复通过 |
 
 原生/PPO视频已复制到本机 `.local/xvla-evidence/`；原生视频 `native-19336.mp4`。PPO的机器可读摘要为 `.local/xvla-evidence/ppo19339_summary.json`，保留逐行日志及TensorBoard来源。
 
@@ -95,14 +101,22 @@ RL sampler 为本项目明确命名的 `terminal_clean_gaussian_v1`，在完整�
 
 | 条目 | 当前状态 | 已有证据 / 尚需证据 |
 | --- | --- | --- |
-| A 注册、预处理、旋转/夹爪、batch/mask/history/reset | PASS（已测范围） | 19342真实Torch全106项PASS；19336真实控制器/回合验证。自动reset、重建所有分支仍主要为替身测试，不冒充全部仿真覆盖 |
+| A 注册、预处理、旋转/夹爪、batch/mask/history/reset | PASS（已测范围） | 19352真实Torch全125项PASS；19336真实控制器/回合验证。自动reset、重建所有分支主要为替身测试，不冒充全部仿真覆盖 |
 | B 固定噪声原生一致性、真实短 rollout | PASS | 19344独立原生processor/raw/7D全部误差0；19336真实2回合成功与视频 |
-| C 真实小 batch SFT、冻结组、保存重载 | NOT RUN / 待数据与作业证据 | `convert` controller回放manifest → `sft` 原 FSDP worker forward/backward；记录真实梯度、变更与冻结组hash、扰动后重载 |
+| C 真实小 batch SFT、冻结组、保存重载 | BLOCKED（19353结果未知） | 1条成功demo、86个官方窗口；19346已执行真实SFT但审计失败，不算通过。19353的冻结hash/重载/独立进程证据需网络恢复后读取 |
 | D 更新前 old/recompute、ratio≈1、解析概率梯度 | PASS（近似数值一致） | 19339有效chunk ratio 0.995446–1.001728；最大chunk logdiff .0045643。解析Gaussian/score梯度独立例子PASS；float32批大小2与micro1产生小差异，未声称逐bit一致 |
-| E 更新后 actor→rollout、checkpoint | PASS（PPO同worker）；独立进程待验 | 19339更新前后完整state hash及同噪声probe匹配；保存后故意扰动参数，再经原生DCP load完整恢复；新进程/完整worker恢复分别验收 |
-| F 真实在线 reward→advantage→actor梯度→step→sync→新rollout | PPO PASS；默认GRPO有效更新未通过 | 19339五个action/prompt组均有非零actor梯度与实际变化；19343/19345全胜组拒绝更新，未伪造学习证据 |
+| E 更新后 actor→rollout、checkpoint | PPO同worker PASS；独立进程 BLOCKED | 19339完整state hash及同噪声probe匹配，保存后故意扰动参数再经原生DCP恢复；19353/19354新进程checker结果未取回，完整新worker恢复NOT RUN |
+| F 真实在线 reward→advantage→actor梯度→step→sync→新rollout | PPO PASS；GRPO BLOCKED（待19354） | 19339五个action/prompt组有非零actor梯度与实际变化；19343/19345全胜拒绝更新；19348有真实相对优势但FSDP失败；19354结果未知 |
 | G 全循环资源与计数 | PPO已测；完整设备峰值部分NOT RUN | 19339 Slurm331秒、0.091944 GPUh；actor allocator峰值14.562GiB，5秒采样本作业compute进程合计21492MiB。该值未含所有EGL显存，后续版本另记录获配设备总使用 |
 | H 相关旧模型/配置回归 | PASS（静态/单元）；旧GPU任务NOT RUN | 默认kwargs、图像、概率维度及注册保留检查PASS；根旧rlinf/examples/legacy工具相对启动SHA无diff。未额外重跑原OpenVLA训练 |
+
+125项通过对应 `2862a8c647f0ac112adcc9183ba8fcce29c862e1`。后续 `ff440880da2ad9b8c0a4f92d6e3a925842f6de17` 只改smoke FSDP包装配置及断言：空wrap targets、单根NO_SHARD/FP32/use_orig_params，wrappers/mixed_precision_rules为空。这消除了已观察的nested边界，是待真实验证的规避方案，尚不能确诊Torch内部根因。连续forward/backward、显存和checkpoint须由19354验证。
+
+19339第一个有效micro逐action误差.0008545，满足当时first-only阈值.001；后续最大.0014477。当前新增第一步optimizer前**每个micro**的chunk ratio ±1%数值门槛，有专门测试。通用actor/ratio=.2998176是20个micro含14个全mask零指标的平均，不能读成有效ratio≈.3；有效6个chunk的比率范围见D。
+
+控制频率在真实demo回放中测为20Hz；官方SFT窗口沿用其30Hz时间轴假设，分别记录，没有将官方插值改成20Hz。视频编码fps不等于控制频率。
+
+2026-11-08服务器SSH两次中断，第二次用户确认暂时无法恢复。本地代码与已有证据继续完成；19353/19354状态不能根据提交推测。每个smoke有1小时Slurm时限。恢复网络后先查询这些作业，不重复启动大规模实验。
 
 2026-11-08 本地重跑命令：
 
@@ -120,3 +134,7 @@ python -m unittest discover -s tests/xvla -p test_registration.py -v
 2. `X-VLA-Libero → 目标任务或扰动 RL → held-out PRO/Plus`：用于任务提升、技能保持和泛化，须记录 SFT/RL/replay 暴露矩阵。
 
 已充分 LIBERO SFT 的 Libero 权重不能称为 few-shot 起点；RL 已见过的条件不能称为零样本 OOD。本次不运行完整规模、不添加 SAC/IQL，不声称已获得统计显著提升。多GPU FSDP、LoRA范围真实在线更新、独立进程完整恢复、更广任务/OOD协议与长期预算仍须单独验收；未支持的模型/算法分支应明确失败。
+
+两个初始化路径目前以分离的Pt-SFT和Libero-RL配置保留，尚未完成Pt→本次SFT产物→RL串联验收。尤其SFT无value head，而PPO新增value head，直接把SFT full_weights.pt用于严格整policy加载会有缺失键；跨full/LoRA/domain-row表示还需明确的core导出/初始化转换，不能跳过strict检查称为同一起点。这些列为后续未完成项，不把现有独立smoke当作数据效率实验入口已全通。
+
+可跟进的研究观察：同一强SFT基座、简单初态和较小噪声下GRPO组可能全部成功，实际有效RL数据为零；4cm压力噪声才在本次产生混合组。后续应记录组内方差、保留率及探索导致的性能变化，统一协议再比较PPO/GRPO。这不构成技能遗忘、few-shot优势或OOD结论。
