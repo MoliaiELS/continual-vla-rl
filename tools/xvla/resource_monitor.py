@@ -41,15 +41,18 @@ def main():
                     by_gpu[uuid] = by_gpu.get(uuid,0)+memory
                 for uuid,memory in by_gpu.items(): peak[uuid] = max(peak.get(uuid,0),memory)
                 allocated_file=directory/'allocated_gpu_uuids.json'
-                allocated=json.loads(allocated_file.read_text()) if allocated_file.is_file() else []
+                # PyTorch exposes the bare UUID; nvidia-smi prefixes it GPU-.
+                allocated={value.removeprefix('GPU-').lower() for value in
+                           (json.loads(allocated_file.read_text()) if allocated_file.is_file() else [])}
                 totals={}
                 if allocated:
                     total_query=subprocess.run(['nvidia-smi','--query-gpu=uuid,memory.used',
                         '--format=csv,noheader,nounits'],check=True,capture_output=True,text=True,timeout=4)
                     for row in csv.reader(io.StringIO(total_query.stdout)):
-                        if len(row)==2 and row[0].strip() in allocated:
+                        if len(row)==2 and row[0].strip().removeprefix('GPU-').lower() in allocated:
                             uuid=row[0].strip(); totals[uuid]=int(row[1].strip())
                             device_peak[uuid]=max(device_peak.get(uuid,0),totals[uuid])
+                    if not totals: errors+=1
                 stream.write(json.dumps(dict(time=time.time(),job_compute_memory_mib=by_gpu,
                                              allocated_device_total_memory_mib=totals))+'\n')
                 stream.flush()

@@ -43,15 +43,35 @@ def main():
                           requested_demonstrations=a.convert_demonstrations)
         extra=[conversion['source_hdf5'],str(output),conversion['data_revision'],
                conversion['source_sha256'],str(a.seed),str(a.convert_demonstrations)]
+    import fcntl
+    a.data.mkdir(parents=True,exist_ok=True)
+    with (a.data/'submit.lock').open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX)
+        submit_locked(a,conversion,extra)
+
+
+def gpu_commitment(info):
+    # Use the largest accounting description; generic/type-specific TRES
+    # duplicate the same GPU and must not be summed across descriptions.
+    totals=[int(value) for value in re.findall(r'\bgres/gpu=(\d+)',info)]
+    nodes=re.search(r'NumNodes=(\d+)(?:-(\d+))?',info)
+    node_count=int((nodes[2] or nodes[1])) if nodes else 1
+    for field,multiplier in [('TresPerNode',node_count),('TresPerJob',1)]:
+        for value in re.findall(field+r'=([^ ]+)',info):
+            total=sum(int(gpu[1]) for gpu in re.finditer(r'(?:gres/)?gpu(?::[^,:=]+)?[:=](\d+)',value))
+            totals.append(total*multiplier)
+    return max(totals,default=0)
+
+
+def submit_locked(a,conversion,extra):
     allocated=0
-    ids=subprocess.check_output(['squeue','-h','-u',os.environ['USER'],'-t','RUNNING,COMPLETING','-o','%i'],text=True).split()
+    # squeue's active set includes pending reservations as well as running jobs.
+    ids=subprocess.check_output(['squeue','-h','-u',os.environ['USER'],'-o','%i'],text=True).split()
     for job in ids:
         info=subprocess.check_output(['scontrol','show','job',job,'-o'],text=True)
-        matches=re.findall(r'TresPerNode=([^ ]+)',info)
-        for value in matches:
-            for gpu in re.finditer(r'(?:gres/)?gpu(?::[^,:=]+)?[:=](\d+)',value):allocated+=int(gpu[1])
+        allocated+=gpu_commitment(info)
     if a.gpus+allocated>2:
-        raise RuntimeError(f'BLOCKED_GPU_BUDGET: requested={a.gpus}, own allocated={allocated}, cap=2; no job submitted')
+        raise RuntimeError(f'BLOCKED_GPU_BUDGET: requested={a.gpus}, own active/pending commitment={allocated}, cap=2; no job submitted')
     if a.mode not in ('unit','imports') and a.gpus==0:raise ValueError('Real model/rollout smoke requires explicit GPU allocation')
     cmd=['sbatch','--parsable','--partition='+a.partition,'--exclude=4090node1','--nodes=1','--ntasks=1',
          '--cpus-per-task=8','--time=01:00:00','--job-name=xvla-'+a.mode,

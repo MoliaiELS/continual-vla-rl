@@ -205,7 +205,9 @@ class TorchLoaderResumeTests(unittest.TestCase):
         next(iterator)
         next(iterator)
         state=copy.deepcopy(original.state_dict())
-        self.assertIsNotNone(state['_index_sampler_state'])
+        # TorchData 0.11 stores custom sampler state under its batch-iterator
+        # snapshot; _index_sampler_state can legitimately be None. Verify the
+        # public resume behavior rather than assuming a private nesting layout.
         expected=[batch[0].tolist() for batch in iterator]
         restored=build(0)
         restored.load_state_dict(state)

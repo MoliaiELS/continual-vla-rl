@@ -10,6 +10,8 @@ from .sft_entry import assert_pinned_runtime
 def main(cfg):
     assert_pinned_runtime()
     if not os.environ.get('SLURM_JOB_ID'):raise RuntimeError('Use project Slurm launcher')
+    from .contracts import validate_algorithm
+    validate_algorithm(cfg)
     register()
     from rlinf.config import validate_cfg
     from rlinf.scheduler import Cluster

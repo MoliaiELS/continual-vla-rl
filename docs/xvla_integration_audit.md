@@ -1,6 +1,6 @@
 # X-VLA 接入审计与验收
 
-记录日期：2026-11-08。本文先登记可复查的实现与本地证据；远端真实模型、仿真与训练项在取得作业日志后逐项更新。`PASS` 只覆盖对应测试范围，不能外推为算法有效或论文性能复现。
+记录日期：2026-11-08。已取得固定权重原生计算对齐、真实 LIBERO rollout 和一次真实 PPO 更新证据；其余验收按下表记录。`PASS` 只覆盖对应测试范围，不能外推为算法有效或论文性能复现。
 
 ## 固定身份与工作边界
 
@@ -22,7 +22,7 @@
 
 已按固定版本核对 BasePolicy、模型注册、OpenPI RL 接口、HF rollout worker、FSDP actor、环境动作准备、LIBERO 子进程、loss/advantage 归约、runner、权重同步和 checkpoint 调用。实现不是从 `docs/xvla/reference` 导入运行，也没有冒用 `openpi` 或 `openvla_oft` builder。
 
-X-VLA 原 requirements 的 `transformers<=4.51.3`、`peft==0.17.1` 与原 OpenVLA 环境不兼容。部署在新 `xvla_rlinf` prefix 中克隆已有本项目环境，再仅在新 prefix 移除旧 editable `openvla-oft` 并安装 `tools/xvla/requirements.txt`。主要 pin：Torch 2.6.0、torchvision 0.21.0、transformers 4.51.3、PEFT 0.17.1、timm 1.0.12、NumPy 1.26.3。克隆保留的依赖以远端 `evidence/requirements.freeze.txt` 和 `evidence/pip-check.txt` 为准；requirements 文件本身不是完整传递依赖 lock。
+X-VLA 原 requirements 的 `transformers<=4.51.3`、`peft==0.17.1` 与原 OpenVLA 环境不兼容。部署在新 `xvla_rlinf` prefix 中克隆已有本项目环境，再仅在新 prefix 移除旧 editable `openvla-oft` 并安装 `tools/xvla/requirements.txt`。主要 pin：Torch 2.6.0+cu124、torchvision 0.21.0、transformers 4.51.3、PEFT 0.17.1、timm 1.0.12、NumPy 1.26.3。独立环境 pip check 已通过；完整观察版本在 `tools/xvla/environment.lock.txt` 及远端 `evidence/requirements.freeze.txt`。lock 用于已有 clone 的约束，不是完整 Conda 二进制环境描述。克隆中旧 LIBERO 的 editable 元数据未作为 lock 安装源，实际运行通过显式 PYTHONPATH 指向本提交 bundled LIBERO；prismatic 未导入。
 
 vendor 位于明确命名空间 `xvla_rlinf.vendor.xvla`，保留 Apache-2.0 许可证与 `UPSTREAM.json`。本项目必要修订应由该 provenance 文件登记。Hugging Face 只下载指定 revision 的权重/processor 资产，不下载执行 checkpoint 附带的 Python custom code；模型与 processor 明确 `trust_remote_code=False`、`local_files_only=True`。`verified.json` 记录文件 SHA256/LFS 哈希。
 
@@ -43,8 +43,11 @@ vendor 位于明确命名空间 `xvla_rlinf.vendor.xvla`，保留 Apache-2.0 许
 | history/reset | 每环境独立 reset mask。`native_eval` 保留官方首条实测、后续上一完整预测最后一条前9维；RL 训练始终使用实测闭环 |
 | 终止/后缀 | 严格模式只执行 active 环境，不执行 post-done 或超过 horizon 的动作；未执行槽位 reward0，发布 `executed_mask[B,C]`，旧 logprob 和重算 logprob 一致 mask 后再 sum |
 | Ray | 仅 `RLINF_XVLA_ISOLATED_RAY=1` 时新建本作业 local Ray，object store ≤2GiB、CPU ≤Slurm配额、GPU来自保留的 CUDA mask，临时目录和 spill 独立；不自动连接别人的 Ray |
+| GPU 枚举 | 新增第7处 opt-in 补丁，将 NVML 物理枚举限制到 Slurm 原 mask；placement 使用 allocation-local ordinal，CUDA 保留原数字/UUID token；EGL 必须查询实际映射，不猜测未获配卡 |
 
 参数范围为 `full`、`lora_heads`、`prompt_heads`。三类 prompt/action 子树显式纳入，包括 DomainAwareLinear 的 Embedding；RLinf factory 的二次 LoRA 注入被拒绝。只训练 domain rows 时使用独立 selected-row Parameter 与冻结完整 buffer，其他行不进入 optimizer，因此不会被 AdamW weight decay 或历史动量修改。模型启动打印真实 trainable 清单、数量与 shape；实际梯度覆盖和保存同步仍须真实作业验证。
+
+本次真实 PPO 的 domain3 prompt/action 可训练参数为 **128,020**；另有观测条件 value head **267,777**，合计 **395,797**。五个 action/prompt 参数张量均有非零 actor 梯度、最大元素改变量约 `1e-6`，weight decay=0、entropy bonus=0。DomainRows 将未选行移为 buffer，因此日志的 `total_parameters` 不包含全部冻结 embedding buffer，不能将它直接当作原模型架构参数总量。`full`/LoRA 的真实大模型训练仍未验收。
 
 SFT 调用官方 clean-action 监督及权重，不以 velocity loss 代替。数据转换通过原 LIBERO delta controller 回放，记录 controller 的 absolute goal，再转 Rotate6D；manifest 固定源数据 revision/SHA256、任务、独立 demo ID、抽样 seed、成功/回放校验和有效帧数。训练帧或窗口数不能记为独立 demonstrations。
 
@@ -68,18 +71,38 @@ RL sampler 为本项目明确命名的 `terminal_clean_gaussian_v1`，在完整�
 
 原生与随机评估即使 seed 相同，终端噪声会消耗额外 RNG，因此不是所有后续 chunk 都严格配对相同 z 的实验。固定输入、固定噪声的计算一致性由 alignment 测试单独验证；少量真实回合只能给出噪声敏感性观察。
 
-## 验收矩阵（远端结果待更新）
+## 实际作业与证据
+
+结果根目录为 `/mnt/slurmfs-4090node3/user_data/yguo704/RLinf/xvla`；各作业保存 `logs/<job>.out/.err`、`runs/<job>/` 和提交收据。每行对应其提交 SHA 的不可变 worktree。
+
+| 作业 | 状态 | 实际结果 |
+| --- | --- | --- |
+| 19330 / 19333 | PASS | 57 / 77 项真实依赖单元测试通过 |
+| 19332 / 19334 / 19335 | FAIL，已修复 | Hydra继承、NVML整机枚举、LIBERO首次导入交互提示；没有冒充真实 rollout 成功 |
+| 19336 | PASS | 原生评估2/2成功；策略控制150步、settling20步；平均75步；800步上限、成功即停止执行 |
+| 19337 | PASS | 固定原始数据revision `f13aa24a3da8c43c7225569f28c562979fa0e35a`，seed1234选中demo_48；96步回放、10步settling，ever/final成功；1条独立demo |
+| 19338 | PASS | 同初态、同native history的终端噪声评估2/2成功；151策略步、20 settling；平均75.5步。样本不足以估计性能差异 |
+| 19339 | PASS | PPO：真实采样→reward→GAE→actor/critic backward→1次optimizer→同步→新eval→原生checkpoint恢复；训练147策略步、评估149步，均2/2成功 |
+| 19340 / 19341 | FAIL，已修复 | 新模型config被旧model/忽略规则漏提交；已加入Git并重跑，不影响19339的已完成证据 |
+| 19342 | PASS | 106项测试全部通过、无SKIP；包含解析概率梯度、独立进程注册、默认旧路径、补丁、GPU映射、恢复检查器边界 |
+| 19343 | FAIL（有效更新门槛） | GRPO回报[1,1,1,1]，方差0，全胜组1，保留率0；拒绝伪造advantage或声称actor更新 |
+| 19344 | PASS | 独立官方参考对照：processor逐tensor严格一致；raw20、sigmoid后、最终7D动作的最大误差均0；FP32/H30/steps10 |
+| 19345 | FAIL（有效更新门槛） | 更强独立探索配置σpos=.015/σrot=.05/σgrip=.3，仍[1,1,1,1]；不是有效GRPO更新 |
+
+原生/PPO视频已复制到本机 `.local/xvla-evidence/`；原生视频 `native-19336.mp4`。PPO的机器可读摘要为 `.local/xvla-evidence/ppo19339_summary.json`，保留逐行日志及TensorBoard来源。
+
+## 验收矩阵
 
 | 条目 | 当前状态 | 已有证据 / 尚需证据 |
 | --- | --- | --- |
-| A 注册、预处理、旋转/夹爪、batch/mask/history/reset | 部分 PASS；真实 Torch/仿真项 NOT RUN | 本地 patch suite 20 PASS、2 SKIP；Hydra配置3 PASS、7 SKIP。controller/reset 单元使用替身，不是仿真证明 |
-| B 固定噪声原生一致性、真实短 rollout | NOT RUN / 远端作业待归档 | `alignment` 需 processor逐tensor、raw action、最终env动作差异；`native_eval` 需任务、reward/done、视频与控制步日志 |
+| A 注册、预处理、旋转/夹爪、batch/mask/history/reset | PASS（已测范围） | 19342真实Torch全106项PASS；19336真实控制器/回合验证。自动reset、重建所有分支仍主要为替身测试，不冒充全部仿真覆盖 |
+| B 固定噪声原生一致性、真实短 rollout | PASS | 19344独立原生processor/raw/7D全部误差0；19336真实2回合成功与视频 |
 | C 真实小 batch SFT、冻结组、保存重载 | NOT RUN / 待数据与作业证据 | `convert` controller回放manifest → `sft` 原 FSDP worker forward/backward；记录真实梯度、变更与冻结组hash、扰动后重载 |
-| D 更新前 old/recompute、ratio≈1、解析概率梯度 | 单元实现已就绪；真实路径 NOT RUN | `tests/xvla/test_sampler.py` 的解析例子与实际Torch输出；首批 `XVLA_RECOMPUTE` 日志；不能用同一错误的两个实现互证 |
-| E 更新后 actor→rollout、checkpoint | NOT RUN | AuditedRunner/AuditedActor：完整state hash、同输入噪声probe；原生save/load前临时扰动再验证恢复 |
-| F 真实在线 reward→advantage→actor梯度→step→sync→新rollout | NOT RUN | 必须有非零 reward-dependent actor-transformer 梯度与参数变化；只有critic/weight decay不算 |
-| G 全循环资源与计数 | NOT RUN | GPU峰值显存、采样/更新/同步耗时、真实steps、settling、episodes、Slurm运行时和GPU-hours |
-| H 相关旧模型/配置回归 | 部分 PASS；运行回归 NOT RUN | opt-in默认关闭、旧图像路径/物理维度/kwargs单元检查；真实旧模型未由本地单元证明 |
+| D 更新前 old/recompute、ratio≈1、解析概率梯度 | PASS（近似数值一致） | 19339有效chunk ratio 0.995446–1.001728；最大chunk logdiff .0045643。解析Gaussian/score梯度独立例子PASS；float32批大小2与micro1产生小差异，未声称逐bit一致 |
+| E 更新后 actor→rollout、checkpoint | PASS（PPO同worker）；独立进程待验 | 19339更新前后完整state hash及同噪声probe匹配；保存后故意扰动参数，再经原生DCP load完整恢复；新进程/完整worker恢复分别验收 |
+| F 真实在线 reward→advantage→actor梯度→step→sync→新rollout | PPO PASS；默认GRPO有效更新未通过 | 19339五个action/prompt组均有非零actor梯度与实际变化；19343/19345全胜组拒绝更新，未伪造学习证据 |
+| G 全循环资源与计数 | PPO已测；完整设备峰值部分NOT RUN | 19339 Slurm331秒、0.091944 GPUh；actor allocator峰值14.562GiB，5秒采样本作业compute进程合计21492MiB。该值未含所有EGL显存，后续版本另记录获配设备总使用 |
+| H 相关旧模型/配置回归 | PASS（静态/单元）；旧GPU任务NOT RUN | 默认kwargs、图像、概率维度及注册保留检查PASS；根旧rlinf/examples/legacy工具相对启动SHA无diff。未额外重跑原OpenVLA训练 |
 
 2026-11-08 本地重跑命令：
 

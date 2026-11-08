@@ -39,14 +39,38 @@ class XVLASftWorker(FSDPVlaSftWorker):
             stream.write(json.dumps(record)+'\n')
 
     def _model_fingerprints(self):
-        # Bounded one-tensor CPU copies, including frozen domain-row buffers.
+        # FSDP may expose temporary Tensor views through named_parameters after
+        # a forward. The native full state has stable canonical keys instead.
+        # Capture requires_grad once, keeping every tied-parameter alias.
+        if not hasattr(self,'_xvla_trainable_state_names'):
+            self._xvla_trainable_state_names={
+                name.replace('_fsdp_wrapped_module.','')
+                for name,parameter in self.model.named_parameters(remove_duplicate=False)
+                if parameter.requires_grad}
+        state=self.get_model_state_dict(cpu_offload=True,full_state_dict=True)
+        canonical={}
+        for name,tensor in state.items():
+            key=name.replace('_fsdp_wrapped_module.','')
+            if key in canonical:
+                raise RuntimeError('Duplicate canonical SFT state key: '+key)
+            if not torch.is_tensor(tensor):
+                raise TypeError('SFT smoke audit requires ordinary tensor state: '+key)
+            canonical[key]=tensor
+        keys=frozenset(canonical)
+        if not self._xvla_trainable_state_names.issubset(keys):
+            raise RuntimeError('Initial trainable aliases absent from full SFT state: '+
+                               str(sorted(self._xvla_trainable_state_names-keys)))
+        if hasattr(self,'_xvla_state_keys') and keys!=self._xvla_state_keys:
+            raise RuntimeError('SFT full state keys changed: missing='+
+                               str(sorted(self._xvla_state_keys-keys))+' added='+
+                               str(sorted(keys-self._xvla_state_keys)))
+        self._xvla_state_keys=keys
         records={}
-        for kind,iterator in [('parameter',self.model.named_parameters()),('buffer',self.model.named_buffers())]:
-            for name,tensor in iterator:
-                contiguous=tensor.detach().cpu().contiguous()
-                digest=hashlib.sha256(contiguous.reshape(-1).view(torch.uint8).numpy().tobytes()).hexdigest()
-                records[kind+':'+name]={"sha256":digest,"shape":list(tensor.shape),
-                                      "trainable":kind=='parameter' and tensor.requires_grad}
+        for name,tensor in canonical.items():
+            contiguous=tensor.detach().cpu().contiguous()
+            digest=hashlib.sha256(contiguous.reshape(-1).view(torch.uint8).numpy().tobytes()).hexdigest()
+            records[name]={"sha256":digest,"shape":list(tensor.shape),"dtype":str(tensor.dtype),
+                           "trainable":name in self._xvla_trainable_state_names}
         return records
 
     def init_worker(self):

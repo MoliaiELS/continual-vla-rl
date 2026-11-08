@@ -6,8 +6,10 @@ claim to test MuJoCo, CUDA, actual controller dynamics, or learned policies.
 from __future__ import annotations
 
 import ast
+from contextlib import nullcontext
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -147,6 +149,45 @@ class RuntimePatchSource(unittest.TestCase):
         with patch.dict(os.environ, {"RLINF_XVLA_ISOLATED_RAY": "1", "SLURM_JOB_ID": "12345", "SLURM_CPUS_PER_TASK": "8", "RLINF_XVLA_RAY_CPUS": "9"}, clear=True):
             with self.assertRaisesRegex(ValueError, "SLURM_CPUS"):
                 ns["_xvla_isolated_ray_kwargs"]()
+
+    def test_isolated_worker_failure_preserves_primary_error_and_skips_dashboard_api(self):
+        tree = ast.parse(self.sources["rlinf/scheduler/cluster/cluster.py"])
+        handlers = [node for node in ast.walk(tree)
+                    if isinstance(node, ast.FunctionDef) and node.name == "signal_handler"]
+        self.assertEqual(len(handlers), 1)
+        code = compile(ast.fix_missing_locations(ast.Module(body=handlers, type_ignores=[])),
+                       "cluster-failure-handler", "exec")
+        for isolated in (True, False):
+            calls = []
+            def list_actors(**kwargs):
+                calls.append(("list_actors", kwargs))
+                if isolated:
+                    raise AssertionError("Isolated failure must not query the disabled dashboard")
+                return []
+            def exit_process(code):
+                raise SystemExit(code)
+            namespace = {
+                "os": os,
+                "self": SimpleNamespace(_distributed_log_collector=SimpleNamespace(
+                    stop=lambda: calls.append(("stop_collector", None)))),
+                "sys": SimpleNamespace(stdout=io.StringIO(), stderr=io.StringIO()),
+                "without_http_proxies": nullcontext,
+                "list_actors": list_actors,
+                "Cluster": SimpleNamespace(NAMESPACE="unchanged-default-namespace"),
+                "ray": SimpleNamespace(is_initialized=lambda: False),
+                "print": lambda *args, **kwargs: calls.append(("print", " ".join(map(str, args)))),
+                "exit": exit_process,
+            }
+            exec(code, namespace)
+            environment = {"RLINF_XVLA_ISOLATED_RAY": "1"} if isolated else {}
+            with patch.dict(os.environ, environment, clear=True):
+                with self.assertRaises(SystemExit) as stopped:
+                    namespace["signal_handler"](None, None)
+            self.assertEqual(stopped.exception.code, 1 if isolated else -1)
+            self.assertEqual(calls[0][0], "stop_collector")
+            self.assertEqual(sum(name == "list_actors" for name, _ in calls), 0 if isolated else 1)
+            if isolated:
+                self.assertIn("original worker exception above", calls[-1][1])
 
     def test_mode_is_opt_in_and_preserves_sampling_kwargs(self):
         tree = ast.parse(self.sources["rlinf/workers/rollout/hf/huggingface_worker.py"])

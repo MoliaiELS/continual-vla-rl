@@ -389,7 +389,26 @@
  
          # Ray log collector
          if distributed_log_dir is not None:
-@@ -498,6 +555,11 @@
+@@ -461,6 +518,18 @@
+             if self._distributed_log_collector is not None:
+                 self._distributed_log_collector.stop()
+ 
++            if os.environ.get("RLINF_XVLA_ISOLATED_RAY") == "1":
++                # Dashboard/state APIs are intentionally disabled for this
++                # bounded job-local Ray. Preserve the worker error above rather
++                # than replacing it with a secondary list_actors API failure.
++                # Ray interpreter cleanup and Slurm own this private instance.
++                print(
++                    "Exiting isolated X-VLA driver after worker failure; "
++                    "preserve the original worker exception above.",
++                    flush=True,
++                )
++                raise SystemExit(1)
++
+             with without_http_proxies():
+                 alive_actors = list_actors(
+                     filters=[
+@@ -498,6 +567,11 @@
  
      def _init_from_existing_managers(self):
          if not ray.is_initialized():
