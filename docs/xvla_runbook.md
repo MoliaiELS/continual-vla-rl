@@ -113,7 +113,7 @@ python tools/xvla/apply_runtime_patch.py --runtime third_party/rlinf --check
 python tools/xvla/apply_runtime_patch.py --runtime third_party/rlinf
 ```
 
-helper验证精确HEAD、patch哈希和每个受影响文件before/after哈希；已应用则幂等返回，遇到用户修改或部分应用时拒绝，不自动reset。6个上游文件改动均默认关闭。训练 mode开关必须同时位于 `actor.model.pass_predict_mode` 和独立评估的 `rollout.model.pass_predict_mode`，因为上游worker根据 only_eval选择model_cfg。
+helper验证精确HEAD、patch哈希和每个受影响文件before/after哈希；已应用则幂等返回，遇到用户修改或部分应用时拒绝，不自动reset。7个上游文件改动均默认关闭。训练 mode开关必须同时位于 `actor.model.pass_predict_mode` 和独立评估的 `rollout.model.pass_predict_mode`，因为上游worker根据 only_eval选择model_cfg。
 
 `job.sh` 设置 `RLINF_XVLA_ISOLATED_RAY=1`，只启动本作业 local Ray；object store有界2GiB，CPU来自Slurm，GPU来自未被修改的 `CUDA_VISIBLE_DEVICES`，`RAY_TMPDIR` 和 spill 路径均包含job ID。禁止全局 `ray stop`。本集群 RealMemory调度配置异常；不申请错误的64G/`--mem=0`独占，不声称内存已被可靠隔离。
 

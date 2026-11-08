@@ -93,6 +93,15 @@ class AuditedActor(EmbodiedFSDPActor):
                                   max=float(value.max()), sum=float(value.sum()),
                                   std=float(value.std(unbiased=False)))
         record('training_batch', rank=self._rank, stats=stats)
+        if self.cfg.algorithm.adv_type=='grpo':
+            rewards=batch['rewards'].float().sum(dim=(0,2)).reshape(-1,self.cfg.algorithm.group_size)
+            variances=rewards.var(dim=1,unbiased=False)
+            record('grpo_groups',returns=rewards.tolist(),variance=variances.tolist(),
+                   all_failure_fraction=float((rewards==0).all(dim=1).float().mean()),
+                   all_success_fraction=float((rewards>0).all(dim=1).float().mean()),
+                   informative_fraction=float((variances>0).float().mean()))
+            if not bool((variances>0).any()):
+                raise RuntimeError('NO_INFORMATIVE_GRPO_GROUP: real rewards have zero within-group variance; no actor update is claimed')
         started = time.monotonic()
         metrics = super().run_training()
         record('training_finished', rank=self._rank, seconds=time.monotonic()-started,
@@ -116,6 +125,11 @@ class AuditedActor(EmbodiedFSDPActor):
         after = self.audit_sync_probe()
         if before != after:
             raise RuntimeError('Actual RLinf checkpoint did not restore full model/probe exactly')
+        policy=unwrapped(self.model)
+        if hasattr(policy,'cfg'):
+            from omegaconf import OmegaConf
+            evidence=dict(model_config=OmegaConf.to_container(policy.cfg,resolve=True),**before)
+            (Path(save_path)/'xvla_evidence.json').write_text(json.dumps(evidence,indent=2)+'\n')
         record('checkpoint_reload', status='PASS', path=save_path, step=step,
                digest=after['digest'], corruption_restored=True)
 

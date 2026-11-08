@@ -42,9 +42,12 @@ python "$repo/tools/xvla/resource_monitor.py" &
 resource_pid=$!
 trap 'result=$?; kill -TERM "$resource_pid" 2>/dev/null || true; wait "$resource_pid" || true; exit "$result"' EXIT
 python - <<'PY'
-import importlib.util,json,sys,rlinf,torch,transformers,peft
-specs={name:(getattr(importlib.util.find_spec(name),'origin',None)) for name in ['rlinf','transformers','prismatic','libero','xvla_rlinf']}
+import importlib.util,json,os,sys,rlinf,torch,transformers,peft
+from pathlib import Path
+specs={name:(getattr(importlib.util.find_spec(name),'origin',None)) for name in ['rlinf','transformers','prismatic','libero.libero','xvla_rlinf']}
 print(json.dumps({'python':sys.executable,'imports':specs,'torch':torch.__version__,'transformers':transformers.__version__,'peft':peft.__version__}),flush=True)
+uuids=[str(torch.cuda.get_device_properties(i).uuid) for i in range(torch.cuda.device_count())]
+(Path(os.environ['XVLA_RUN_DIR'])/'allocated_gpu_uuids.json').write_text(json.dumps(uuids))
 PY
 case "$mode" in
  unit) python -m unittest discover -s "$repo/tests/xvla" -v 2>&1 | tee "$XVLA_RUN_DIR/unit.log" ;;
@@ -61,8 +64,11 @@ case "$mode" in
      --source-sha256 "$source_hash" --seed "$selection_seed" --demonstrations "$demonstrations" \
      2>&1 | tee "$XVLA_RUN_DIR/convert.log"
    python -m xvla_rlinf.sft inspect "$converted_dir/manifest.json" ;;
- ppo|grpo) python -m xvla_rlinf.entry --config-name "${mode}_smoke" ;;
+ ppo|grpo|grpo_exploration) python -m xvla_rlinf.entry --config-name "${mode}_smoke" ;;
  sft) python -m xvla_rlinf.sft_entry --config-path "$repo/configs/xvla" --config-name sft_smoke ;;
  *) exit 2 ;;
 esac
+if [[ "$mode" == ppo || "$mode" == grpo || "$mode" == grpo_exploration || "$mode" == sft ]]; then
+  python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$XVLA_RUN_DIR/${mode}-smoke/checkpoints/global_step_1/actor"
+fi
 echo XVLA_JOB_PASS

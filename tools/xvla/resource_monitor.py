@@ -18,6 +18,7 @@ def main():
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     started = time.time()
     peak = {}
+    device_peak = {}
     errors = 0
     samples = 0
     def belongs(pid):
@@ -39,7 +40,18 @@ def main():
                     except ValueError: continue
                     by_gpu[uuid] = by_gpu.get(uuid,0)+memory
                 for uuid,memory in by_gpu.items(): peak[uuid] = max(peak.get(uuid,0),memory)
-                stream.write(json.dumps(dict(time=time.time(),job_compute_memory_mib=by_gpu))+'\n')
+                allocated_file=directory/'allocated_gpu_uuids.json'
+                allocated=json.loads(allocated_file.read_text()) if allocated_file.is_file() else []
+                totals={}
+                if allocated:
+                    total_query=subprocess.run(['nvidia-smi','--query-gpu=uuid,memory.used',
+                        '--format=csv,noheader,nounits'],check=True,capture_output=True,text=True,timeout=4)
+                    for row in csv.reader(io.StringIO(total_query.stdout)):
+                        if len(row)==2 and row[0].strip() in allocated:
+                            uuid=row[0].strip(); totals[uuid]=int(row[1].strip())
+                            device_peak[uuid]=max(device_peak.get(uuid,0),totals[uuid])
+                stream.write(json.dumps(dict(time=time.time(),job_compute_memory_mib=by_gpu,
+                                             allocated_device_total_memory_mib=totals))+'\n')
                 stream.flush()
                 samples += 1
             except (OSError,subprocess.SubprocessError):
@@ -53,8 +65,10 @@ def main():
         elapsed_seconds=time.time()-started,allocated_gpus=int(os.environ.get('XVLA_ALLOCATED_GPUS','0')),
         gpu_hours=int(os.environ.get('XVLA_ALLOCATED_GPUS','0'))*(time.time()-started)/3600,
         peak_job_compute_memory_mib_by_gpu=peak,samples=samples,query_errors=errors,
+        peak_allocated_device_total_memory_mib=device_peak,
         physical_memory=physical_memory,slurm_cuda_visible_devices=os.environ.get('CUDA_VISIBLE_DEVICES'),
         definition='5-second sampled sum of nvidia-smi compute-process memory for exact SLURM_JOB_ID; not unsampled allocator high-water',
+        device_total_definition='5-second total device use on CUDA-queried allocated UUIDs, includes EGL and any external process on those devices',
         ram_limit='Cluster RealMemory is misconfigured; physical RAM is observed, not reliably reserved/isolated')
     (directory/'resources.json').write_text(json.dumps(result,indent=2)+'\n')
     print('XVLA_RESOURCES '+json.dumps(result),flush=True)

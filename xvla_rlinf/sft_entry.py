@@ -106,6 +106,10 @@ class XVLASftWorker(FSDPVlaSftWorker):
                               perturbed_parameter=probe_name,scope='same-worker native save/load, not independent process')
             if not passed:
                 raise RuntimeError('Native RLinf checkpoint did not exactly restore X-VLA parameters/buffers')
+            from .audit_workers import state_digest
+            digest=state_digest(self.get_model_state_dict(cpu_offload=True,full_state_dict=True))
+            evidence={'model_config':OmegaConf.to_container(self.cfg.actor.model,resolve=True),'digest':digest}
+            (Path(save_path)/'xvla_evidence.json').write_text(json.dumps(evidence,indent=2)+'\n')
 
 
 def assert_pinned_runtime():

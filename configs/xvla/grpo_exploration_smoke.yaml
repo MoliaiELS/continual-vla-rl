@@ -1,0 +1,35 @@
+# One bounded fallback qualification if the default GRPO group is uniform.
+# This is a distinct exploration setting, never a PPO-vs-GRPO performance comparison.
+defaults:
+  - _embodied_base
+  - _ppo_overrides
+  - _self_
+hydra:
+  searchpath:
+    - file://${oc.env:RLINF_RUNTIME}/examples/embodiment/config
+  run:
+    dir: .
+  output_subdir: null
+runner:
+  logger:
+    experiment_name: grpo_exploration-smoke
+algorithm:
+  adv_type: grpo
+  loss_type: actor
+  group_size: 4
+  filter_rewards: true
+  rewards_lower_bound: 0.01
+  rewards_upper_bound: 0.99
+  log_group_success_metrics: true
+env:
+  train:
+    total_num_envs: 4
+    group_size: 4
+actor:
+  global_batch_size: 40
+  model:
+    add_value_head: false
+    xvla:
+      position_std: 0.015
+      rotation_std: 0.05
+      gripper_logit_std: 0.3

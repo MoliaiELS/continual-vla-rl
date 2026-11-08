@@ -49,7 +49,7 @@ latent 不 clip；任何环境边界限制是固定且记录的执行映射，�
 
 ## 预测后缀、padding、执行 mask 与历史
 
-RL sampler 强制 `history_mode=measured_state`，独立于 native_eval 官方 autoregressive history。下一次 RL 观测只能取执行后的实测状态，不得使用未执行 q 后缀更新 history。
+RL **训练**强制 `history_mode=measured_state`，独立于 native_eval 官方 autoregressive history。下一次 RL 观测只能取执行后的实测状态，不得使用未执行 q 后缀更新 history。单独的 `stochastic_eval_smoke` 使用 `eval_history_mode=native_history` 和完整 chunk，在同原生历史协议下观察终端噪声的影响；此评估模式不用于 actor 概率重算或策略梯度。
 
 在给定完整 z 和观测的条件下，终端 q 的各行/各维独立；不会执行且不进入任何后续状态/历史的 q 后缀可以被精确边缘化。保留完整 z，删去无因果影响的终端 q 后缀，与删去影响前缀的 z 后缀不同。
 

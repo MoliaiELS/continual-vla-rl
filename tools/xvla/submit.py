@@ -21,7 +21,7 @@ def discover_task0_source(data_root: Path):
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--repo',type=Path,required=True);p.add_argument('--data',type=Path,required=True)
-    p.add_argument('--mode',choices=['unit','imports','alignment','native_eval','stochastic_eval','convert','sft','ppo','grpo'],required=True)
+    p.add_argument('--mode',choices=['unit','imports','alignment','native_eval','stochastic_eval','convert','sft','ppo','grpo','grpo_exploration'],required=True)
     p.add_argument('--gpus',type=int,choices=[0,1,2],required=True);p.add_argument('--partition',required=True)
     p.add_argument('--convert-output',type=Path)
     p.add_argument('--convert-demonstrations',type=int,choices=[1,2],default=1)

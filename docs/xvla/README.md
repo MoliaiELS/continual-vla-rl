@@ -23,8 +23,7 @@
 可以本地查看参考源码，不切换工作树：
 
 ```powershell
-git show rlinf-upstream/main:rlinf/models/embodiment/base_policy.py
-# 为重复核查使用固定 SHA，而不是会移动的 main：
+git show 1bf78980d9339cbc67497eddceb9a1e3a74e2acc:rlinf/models/embodiment/base_policy.py
 git show 1bf78980d9339cbc67497eddceb9a1e3a74e2acc:rlinf/models/embodiment/openpi/tasks/rl.py
 ```
 
@@ -32,7 +31,7 @@ git show 1bf78980d9339cbc67497eddceb9a1e3a74e2acc:rlinf/models/embodiment/openpi
 
 ```powershell
 git remote add rlinf-upstream https://github.com/RLinf/RLinf.git
-git fetch --filter=blob:none --no-tags rlinf-upstream main
+git fetch --filter=blob:none --no-tags rlinf-upstream 1bf78980d9339cbc67497eddceb9a1e3a74e2acc
 git cat-file -e '1bf78980d9339cbc67497eddceb9a1e3a74e2acc^{commit}'
 ```
 
