@@ -22,12 +22,6 @@ from typing import Any, Dict
 
 import numpy as np
 import torch
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
-from PIL import Image
-import uvicorn
-import json_numpy
-import cv2
 
 from transformers import PreTrainedModel
 from .modeling_florence2 import Florence2ForConditionalGeneration
@@ -226,6 +220,12 @@ class XVLA(PreTrainedModel):
         """
         if self.app is not None:
             return
+
+        from fastapi import FastAPI
+        from fastapi.responses import JSONResponse
+        from PIL import Image
+        import json_numpy
+        import cv2
 
         app = FastAPI()
 

@@ -1,6 +1,13 @@
 defaults:
-  - ppo_smoke
+  - _embodied_base
+  - _ppo_overrides
   - _self_
+hydra:
+  searchpath:
+    - file://${oc.env:RLINF_RUNTIME}/examples/embodiment/config
+  run:
+    dir: .
+  output_subdir: null
 runner:
   only_eval: true
   logger:

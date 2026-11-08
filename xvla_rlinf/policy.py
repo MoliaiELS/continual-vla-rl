@@ -10,7 +10,7 @@ import torch
 from torch import nn
 from rlinf.models.embodiment.base_policy import BasePolicy, ForwardType
 
-from .parameters import configure_trainable
+from .parameters import configure_trainable, trainable_report
 from .sampler import TerminalCleanGaussianSampler, clean_action_prediction
 from .transforms import NativeProprioHistory, env_actions_from_model, prepare_processor_inputs
 
@@ -46,6 +46,7 @@ class XVLAPolicy(nn.Module, BasePolicy):
             feature_dim=int(core.config.florence_config.projection_dim)
             self.value_head=nn.Sequential(nn.Linear(feature_dim+20,256),nn.Tanh(),nn.Linear(256,1))
         self._no_split_modules = ['SoftPromptedTransformer']
+        self.trainable_manifest={'core_scope':self.trainable_manifest,**trainable_report(self)}
         print('XVLA_TRAINABLE '+json.dumps(self.trainable_manifest),flush=True)
 
     @classmethod
@@ -85,7 +86,7 @@ class XVLAPolicy(nn.Module, BasePolicy):
         states=obs['states']
         if native_history:
             batch=len(states)
-            if self._history_batch_size not in (None,batch):
+            if self._history_batch_size not in (None,batch) and obs.get('env_ids') is None:
                 raise ValueError('Native history requires fixed batch or explicit stable env_ids')
             self._history_batch_size=batch
             proprio=self.history.prepare(states,obs.get('reset_mask'),obs.get('env_ids'))
@@ -120,9 +121,16 @@ class XVLAPolicy(nn.Module, BasePolicy):
         native=mode=='eval' and eval_sampler=='native_eval'
         if mode=='eval' and eval_sampler not in ('native_eval',self.sampler.name):
             raise NotImplementedError('Unknown X-VLA evaluation sampler: '+str(eval_sampler))
-        inputs=self._inputs(env_obs,native_history=native)
+        eval_history=self.xcfg.get('eval_history_mode','native_history')
+        if mode=='eval' and eval_history not in ('native_history','measured_state'):
+            raise ValueError('Unknown evaluation proprio history mode')
+        if native and eval_history!='native_history':
+            raise ValueError('native_eval preserves official native_history; use a separately named sampler')
+        inputs=self._inputs(env_obs,native_history=native or (mode=='eval' and eval_history=='native_history'))
         noise=kwargs.get('initial_noise')
         if native:
+            if self.num_action_chunks!=self.core.num_actions:
+                raise ValueError('native_eval requires full checkpoint chunk execution; prefix execution is an RL protocol')
             if noise is None:
                 noise=torch.randn((len(inputs['proprio']),self.core.num_actions,20),
                                   device=inputs['proprio'].device,dtype=inputs['proprio'].dtype)
@@ -134,6 +142,12 @@ class XVLAPolicy(nn.Module, BasePolicy):
         sampled=self.sampler.sample(self.core,inputs,initial_noise=noise,
                     terminal_noise=kwargs.get('terminal_noise'),execution_steps=self.num_action_chunks,steps=self.steps)
         raw=sampled['raw_actions']
+        if mode=='eval' and eval_history=='native_history':
+            if self.num_action_chunks!=self.core.num_actions:
+                raise ValueError('Native-history comparison requires full checkpoint chunk')
+            # This eval-only comparison propagates the same executed prediction
+            # history as native_eval. RL training always uses measured state.
+            self.history.update(torch.cat((raw,torch.zeros_like(raw)),dim=-1),env_obs.get('env_ids'))
         # Only first ten raw single-arm coordinates are stochastic terminal q.
         # Padding arm coordinates are not fabricated as seven-dimensional actions.
         actions=self._actions(raw)

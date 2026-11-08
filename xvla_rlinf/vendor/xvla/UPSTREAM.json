@@ -35,7 +35,7 @@
     {
       "path": "models/modeling_xvla.py",
       "upstream_sha256": "f42ee52a4833f60656becdc5f26dbc3edd19656f8febcae7147a7d6c5860560a",
-      "vendored_sha256": "f4c2efa38ee324fb1e16aa59312a34947464fc34feb19a1aa774d18d689d7e30",
+      "vendored_sha256": "5686b68ca28b044d1e0830c98afaf9e5a7709ee09f86f238545391305dbd7ad9",
       "patches": [
         "defer optional HTTP-only imports; numerical model unchanged"
       ]

@@ -1,5 +1,5 @@
 defaults:
-  - /libero_sft_openpi
+  - _sft_base
   - _self_
 hydra:
   searchpath:

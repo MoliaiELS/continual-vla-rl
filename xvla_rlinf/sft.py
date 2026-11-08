@@ -88,6 +88,7 @@ def convert_demonstrations(
     demonstrations: int = 1,
     seed: int = 1234,
     camera_size: int = 256,
+    expected_source_sha256: str | None = None,
     env_factory=None,
 ) -> Path:
     """Replay full selected demos and publish a provenance-checked manifest.
@@ -117,6 +118,8 @@ def convert_demonstrations(
         "sft_source_frequency": 30.0, "sft_query_duration_seconds": 1.0,
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"), "episodes": [],
     }
+    if expected_source_sha256 is not None and manifest["source_sha256"] != expected_source_sha256:
+        raise ValueError("Raw HDF5 differs from its pinned download SHA256 receipt")
     with h5py.File(source, "r") as original:
         if "data" not in original:
             raise ValueError("Expected raw LIBERO /data/demo_* hierarchy")
@@ -176,6 +179,7 @@ def convert_demonstrations(
                     "conversion_env_steps": len(actions), "settling_env_steps": 10,
                     "control_freq": getattr(env.env, "control_freq", None),
                 })
+                print("XVLA_SFT_CONVERTED " + json.dumps(manifest["episodes"][-1]), flush=True)
             finally:
                 env.close()
     manifest["demonstrations"] = len(manifest["episodes"])
@@ -315,6 +319,7 @@ def main():
     convert.add_argument("--task-suite", default="libero_spatial")
     convert.add_argument("--task-id", type=int, required=True)
     convert.add_argument("--data-revision", required=True)
+    convert.add_argument("--source-sha256", help="Expected SHA256 from the pinned download receipt")
     convert.add_argument("--demonstrations", type=int, default=1)
     convert.add_argument("--seed", type=int, default=1234)
     convert.add_argument("--camera-size", type=int, default=256)
@@ -327,7 +332,8 @@ def main():
         manifest = convert_demonstrations(args.source_hdf5, args.output_dir, task_suite=args.task_suite,
                                          task_id=args.task_id, data_revision=args.data_revision,
                                          demonstrations=args.demonstrations, seed=args.seed,
-                                         camera_size=args.camera_size)
+                                         camera_size=args.camera_size,
+                                         expected_source_sha256=args.source_sha256)
         print(str(manifest))
     else:
         manifest = load_manifest(args.manifest)

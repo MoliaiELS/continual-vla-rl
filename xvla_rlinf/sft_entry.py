@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ import subprocess
 import hydra
 import rlinf
 import torch.multiprocessing as multiprocessing
+import torch
 from omegaconf import OmegaConf
 
 from rlinf.config import validate_cfg
@@ -27,6 +29,83 @@ class XVLASftWorker(FSDPVlaSftWorker):
 
     def build_dataloader(self, data_paths, eval_dataset: bool = False):
         return build_xvla_sft_dataloader(self.cfg, self._world_size, self._rank, data_paths, eval_dataset)
+
+    def _audit_write(self, event, **fields):
+        record={"event":event,"rank":self._rank,**fields}
+        print('XVLA_SFT_AUDIT '+json.dumps(record),flush=True)
+        directory=Path(os.environ['XVLA_RUN_DIR'])
+        directory.mkdir(parents=True,exist_ok=True)
+        with (directory/f'sft_worker_rank{self._rank}.jsonl').open('a') as stream:
+            stream.write(json.dumps(record)+'\n')
+
+    def _model_fingerprints(self):
+        # Bounded one-tensor CPU copies, including frozen domain-row buffers.
+        records={}
+        for kind,iterator in [('parameter',self.model.named_parameters()),('buffer',self.model.named_buffers())]:
+            for name,tensor in iterator:
+                contiguous=tensor.detach().cpu().contiguous()
+                digest=hashlib.sha256(contiguous.reshape(-1).view(torch.uint8).numpy().tobytes()).hexdigest()
+                records[kind+':'+name]={"sha256":digest,"shape":list(tensor.shape),
+                                      "trainable":kind=='parameter' and tensor.requires_grad}
+        return records
+
+    def init_worker(self):
+        super().init_worker()
+        self._xvla_audit=bool(self.cfg.runner.get('xvla_audit',True)) and self._world_size==1
+        self._xvla_steps=0
+        if self._xvla_audit:
+            self._xvla_initial=self._model_fingerprints()
+            self._audit_write('initialized',parameter_and_buffer_fingerprints=self._xvla_initial,
+                              data_config=self.data_config,world_size=self._world_size)
+        else:
+            self._audit_write('fingerprint_probe_not_run',reason='disabled or multi-rank; no single-rank claim')
+
+    def optimizer_step(self):
+        audit=self._xvla_audit and self._xvla_steps==0
+        if audit:
+            gradients=[]
+            for name,parameter in self.model.named_parameters():
+                if parameter.requires_grad:
+                    gradient=parameter.grad
+                    gradients.append({'name':name,'has_gradient':gradient is not None,
+                                      'finite':bool(torch.isfinite(gradient).all()) if gradient is not None else True,
+                                      'nonzero':bool(torch.count_nonzero(gradient)) if gradient is not None else False})
+            if not any(item['nonzero'] for item in gradients) or not all(item['finite'] for item in gradients):
+                raise RuntimeError('Real SFT backward did not yield finite nonzero trainable gradients')
+        result=super().optimizer_step()
+        if audit:
+            after=self._model_fingerprints()
+            changed=[key for key in self._xvla_initial if after[key]['sha256']!=self._xvla_initial[key]['sha256']]
+            changed_trainable=[key for key in changed if self._xvla_initial[key]['trainable']]
+            changed_frozen=[key for key in changed if not self._xvla_initial[key]['trainable']]
+            self._audit_write('optimizer_update',gradients=gradients,changed_trainable=changed_trainable,
+                              changed_frozen=changed_frozen,post_update_fingerprints=after)
+            if not changed_trainable or changed_frozen:
+                raise RuntimeError('SFT update changed no trainable parameter, or modified frozen weights/buffers')
+        self._xvla_steps+=1
+        return result
+
+    def save_checkpoint(self, save_path, step=0):
+        super().save_checkpoint(save_path,step)
+        if self._xvla_audit:
+            expected=self._model_fingerprints()
+            # A deliberate temporary perturbation proves load really restores a
+            # weight rather than comparing an unchanged model to itself.
+            with torch.no_grad():
+                for name,parameter in self.model.named_parameters():
+                    if parameter.requires_grad and parameter.numel():
+                        parameter.reshape(-1)[0].add_(0.125)
+                        probe_name=name
+                        break
+                else:
+                    raise RuntimeError('No trainable parameter for native checkpoint roundtrip probe')
+            super().load_checkpoint(save_path)
+            actual=self._model_fingerprints()
+            passed=actual==expected
+            self._audit_write('native_checkpoint_roundtrip',passed=passed,checkpoint=str(save_path),
+                              perturbed_parameter=probe_name,scope='same-worker native save/load, not independent process')
+            if not passed:
+                raise RuntimeError('Native RLinf checkpoint did not exactly restore X-VLA parameters/buffers')
 
 
 def assert_pinned_runtime():

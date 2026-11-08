@@ -1,0 +1,23 @@
+defaults:
+  - _embodied_base
+  - _ppo_overrides
+  - _self_
+hydra:
+  searchpath:
+    - file://${oc.env:RLINF_RUNTIME}/examples/embodiment/config
+  run:
+    dir: .
+  output_subdir: null
+runner:
+  only_eval: true
+  logger:
+    experiment_name: stochastic-eval-smoke
+rollout:
+  collect_prev_infos: false
+  collect_final_values: false
+actor:
+  model:
+    add_value_head: false
+    xvla:
+      eval_sampler: terminal_clean_gaussian_v1
+      eval_history_mode: native_history

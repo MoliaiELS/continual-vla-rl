@@ -30,6 +30,16 @@ case "$mode" in
  imports) python -m xvla_rlinf.smoke imports ;;
  alignment) python -m xvla_rlinf.smoke alignment ;;
  native_eval) python -m xvla_rlinf.entry --config-name native_eval_smoke ;;
+ stochastic_eval) python -m xvla_rlinf.entry --config-name stochastic_eval_smoke ;;
+ convert)
+   source_hdf5="${4:?source HDF5}"; converted_dir="${5:?converted output}"
+   data_revision="${6:?data revision}"; source_hash="${7:?source SHA256}"
+   selection_seed="${8:?selection seed}"; demonstrations="${9:?demonstration count}"
+   python -m xvla_rlinf.sft convert --source-hdf5 "$source_hdf5" --output-dir "$converted_dir" \
+     --task-suite libero_spatial --task-id 0 --data-revision "$data_revision" \
+     --source-sha256 "$source_hash" --seed "$selection_seed" --demonstrations "$demonstrations" \
+     2>&1 | tee "$XVLA_RUN_DIR/convert.log"
+   python -m xvla_rlinf.sft inspect "$converted_dir/manifest.json" ;;
  ppo|grpo) python -m xvla_rlinf.entry --config-name "${mode}_smoke" ;;
  sft) python -m xvla_rlinf.sft_entry --config-path "$repo/configs/xvla" --config-name sft_smoke ;;
  *) exit 2 ;;
