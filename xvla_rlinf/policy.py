@@ -36,6 +36,7 @@ class XVLAPolicy(nn.Module, BasePolicy):
         self.history = NativeProprioHistory(mode='native_history')
         self._history_batch_size = None
         self.global_step = 0
+        self._audit_first_recompute = True
         self.sampler = TerminalCleanGaussianSampler(
             pos_std=float(self.xcfg.get('position_std',.003)),
             rotation_std=float(self.xcfg.get('rotation_std',.01)),
@@ -138,7 +139,8 @@ class XVLAPolicy(nn.Module, BasePolicy):
         actions=self._actions(raw)
         cache={k:v.detach().clone() for k,v in inputs.items()}
         cache.update(initial_noise=sampled['initial_noise'],raw_actions=raw.detach().clone(),
-                     action=torch.as_tensor(actions).reshape(len(raw),-1),model_action=raw.detach().reshape(len(raw),-1))
+                     action=torch.as_tensor(actions).reshape(len(raw),-1),model_action=raw.detach().reshape(len(raw),-1),
+                     sampled_logprobs=sampled['logprobs'].detach().clone())
         return actions,{'prev_logprobs':sampled['logprobs'].float(),
                        'prev_values':self._values(sampled['enc_features'],inputs,compute_values),
                        'forward_inputs':cache}
@@ -159,6 +161,20 @@ class XVLAPolicy(nn.Module, BasePolicy):
         if mask is not None:
             if mask.shape!=logprobs.shape[:2]:raise ValueError('Executed mask shape differs from action prefix')
             logprobs=torch.where(mask[...,None].bool(),logprobs,0.)
+        if self.xcfg.get('audit_gradients',False):
+            old=forward_inputs['sampled_logprobs'].float()
+            if mask is not None:old=torch.where(mask[...,None].bool(),old,0.)
+            error=(logprobs.detach()-old).abs().max().item()
+            print('XVLA_RECOMPUTE '+json.dumps({'first':self._audit_first_recompute,
+                   'max_abs_logprob_difference':error,'global_step':self.global_step}),flush=True)
+            if self._audit_first_recompute and error>float(self.xcfg.get('logprob_tolerance',1e-3)):
+                raise RuntimeError('Initial actor logprob does not reproduce behavior policy')
+            self._audit_first_recompute=False
+            if logprobs.requires_grad:
+                def record_actor_gradient(gradient):
+                    print('XVLA_ACTOR_LOGPROB_GRAD '+json.dumps({'norm':float(gradient.float().norm()),
+                          'nonzero':int(torch.count_nonzero(gradient))}),flush=True)
+                logprobs.register_hook(record_actor_gradient)
         return {'logprobs':logprobs,'values':self._values(stats['enc_features'],inputs,compute_values).squeeze(-1),
                 'entropy':stats['entropy'].float() if compute_entropy else None}
 

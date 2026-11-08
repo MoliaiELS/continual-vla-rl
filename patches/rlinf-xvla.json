@@ -1,0 +1,37 @@
+{
+  "upstream_commit": "1bf78980d9339cbc67497eddceb9a1e3a74e2acc",
+  "format": 1,
+  "files": [
+    {
+      "path": "rlinf/workers/rollout/hf/huggingface_worker.py",
+      "before_sha256": "e983592bf32cb49a16e29fb1c602cf3d8544014afa6758cd90a55fd9d30fda4e",
+      "after_sha256": "cd20f849e7aa15c95d66cac257a870934e868c6af3749a4df62784739c403377"
+    },
+    {
+      "path": "rlinf/workers/actor/embodied_fsdp_actor_worker.py",
+      "before_sha256": "c648a152e99d7284ed46becad99c47a55bf9f448f51e1ad1c38bd62e41e3a37d",
+      "after_sha256": "0c3630c9ef4b8a2cb553ea9b1c299f2faeaf91d744317c031838c7bca9a506ba"
+    },
+    {
+      "path": "rlinf/envs/sim/libero/libero_env.py",
+      "before_sha256": "15e78dd2be1cd8225683cf392a1ffc0c4958d715236fe2c41f9faa5df3631679",
+      "after_sha256": "f364816b3ae25f7b5d07349ed886b96ce81aecc06f9268cccc3645367bb88d04"
+    },
+    {
+      "path": "rlinf/envs/sim/libero/venv.py",
+      "before_sha256": "f2b4b4cfee94cf751271f79cccc7884d6e41ced6520a6ed5a527fc44dab896e3",
+      "after_sha256": "1605f522a9ec9f93a6988d33dab5f39ce61110ef44bc6184de725e8d621ba7bc"
+    },
+    {
+      "path": "rlinf/workers/env/env_worker.py",
+      "before_sha256": "79ccf1a06cd21ce6455ca2bb80febc1a2ae5c11222bc83cf89ea44ac1632e652",
+      "after_sha256": "da822966c209d1f37c8ac6660a3ee25e6d8255c88e9bfb613be46dc3ab4bf02f"
+    },
+    {
+      "path": "rlinf/scheduler/cluster/cluster.py",
+      "before_sha256": "a1f69cc1a2f74c39cd8141b28a1163cf0dd40cecaa184b4e7070b001baea6019",
+      "after_sha256": "23d883a169f471b3ab2cb329e5c4cccd3fa00d0d0663bf6976570c6e6c166a54"
+    }
+  ],
+  "patch_sha256": "37771ab24eb0f0eb3749bd0f0aca006c68a52f93e9ff86165bf739da4e0a9e8c"
+}

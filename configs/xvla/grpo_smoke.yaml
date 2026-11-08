@@ -1,0 +1,21 @@
+defaults:
+  - ppo_smoke
+  - _self_
+runner:
+  logger:
+    experiment_name: grpo-smoke
+algorithm:
+  adv_type: grpo
+  group_size: 4
+  filter_rewards: true
+  rewards_lower_bound: 0.01
+  rewards_upper_bound: 0.99
+  log_group_success_metrics: true
+env:
+  train:
+    total_num_envs: 4
+    group_size: 4
+actor:
+  global_batch_size: 40
+  model:
+    add_value_head: false

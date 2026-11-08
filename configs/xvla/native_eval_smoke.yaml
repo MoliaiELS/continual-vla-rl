@@ -1,0 +1,15 @@
+defaults:
+  - ppo_smoke
+  - _self_
+runner:
+  only_eval: true
+  logger:
+    experiment_name: native-eval-smoke
+rollout:
+  collect_prev_infos: false
+  collect_final_values: false
+actor:
+  model:
+    add_value_head: false
+    xvla:
+      eval_sampler: native_eval

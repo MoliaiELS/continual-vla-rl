@@ -1,0 +1,403 @@
+--- a/rlinf/workers/rollout/hf/huggingface_worker.py
++++ b/rlinf/workers/rollout/hf/huggingface_worker.py
+@@ -534,6 +534,12 @@
+                 kwargs["mode"] = mode
+             else:
+                 kwargs = {"mode": mode}
++
++        # Custom policy adapters opt in explicitly; built-in model behavior is
++        # unchanged. Dynamic registration alone does not imply a mode contract.
++        if self.model_cfg.get("pass_predict_mode", False):
++            kwargs = dict(kwargs)
++            kwargs["mode"] = "eval" if self.enable_dagger else mode
+ 
+         if model_type in [
+             SupportedModel.CNN_POLICY,
+--- a/rlinf/workers/actor/embodied_fsdp_actor_worker.py
++++ b/rlinf/workers/actor/embodied_fsdp_actor_worker.py
+@@ -797,7 +797,12 @@
+             "loss_type": self.cfg.algorithm.loss_type,
+             "logprob_type": self.cfg.algorithm.logprob_type,
+             "reward_type": self.cfg.algorithm.reward_type,
+-            "single_action_dim": self.cfg.actor.model.get("action_dim", 7),
++            # A continuous policy may already sum the internal action density
++            # per environment step, e.g. X-VLA [B,C,1] over all 10 raw dims.
++            # This is probability layout, not the physical 7-D control space.
++            "single_action_dim": self.cfg.actor.model.get(
++                "logprob_action_dim", self.cfg.actor.model.get("action_dim", 7)
++            ),
+             "logprobs": output_dict["logprobs"],
+             "values": output_dict.get("values", None),
+             "old_logprobs": prev_logprobs,
+--- a/rlinf/envs/sim/libero/libero_env.py
++++ b/rlinf/envs/sim/libero/libero_env.py
+@@ -180,6 +180,13 @@
+ 
+         self.video_cfg = cfg.video_cfg
+         self.current_raw_obs = None
++        # All X-VLA behavior is opt-in. These flags are independent so the
++        # native client/controller equivalence can be checked before RL.
++        self._xvla_reset_mask = np.zeros(self.num_envs, dtype=bool)
++        self._xvla_finished = np.zeros(self.num_envs, dtype=bool)
++        self._xvla_policy_steps = np.zeros(self.num_envs, dtype=np.int64)
++        self._xvla_settling_steps = np.zeros(self.num_envs, dtype=np.int64)
++        self._xvla_executed = np.zeros(self.num_envs, dtype=bool)
+         self.skip_intermediate_renders = bool(
+             OmegaConf.select(cfg, "skip_intermediate_renders", default=False)
+         )
+@@ -755,9 +762,12 @@
+         return infos
+ 
+     def _extract_image_and_state(self, obs):
++        raw_images = bool(self.cfg.get("xvla_raw_observations", False))
+         return {
+-            "full_image": get_libero_image(obs),
+-            "wrist_image": get_libero_wrist_image(obs),
++            "full_image": (np.ascontiguousarray(obs["agentview_image"])
++                           if raw_images else get_libero_image(obs)),
++            "wrist_image": (np.ascontiguousarray(obs["robot0_eye_in_hand_image"])
++                            if raw_images else get_libero_wrist_image(obs)),
+             "state": np.concatenate(
+                 [
+                     obs["robot0_eef_pos"],
+@@ -792,6 +802,11 @@
+             "states": states,
+             "task_descriptions": self.task_descriptions,
+         }
++        if self.cfg.get("xvla_measured_state", False):
++            obs["states"] = to_tensor(self.env.measured_xvla_proprio())
++        if self.cfg.get("xvla_history_reset", False):
++            obs["reset_mask"] = to_tensor(self._xvla_reset_mask.copy())
++            self._xvla_reset_mask[:] = False
+         return obs
+ 
+     def _reconfigure(self, reset_state_ids, env_idx):
+@@ -846,6 +861,12 @@
+             reset_state_ids = self._get_random_reset_state_ids(num_reset_states)
+ 
+         self._reconfigure(reset_state_ids, env_idx)
++        # A reused child may still have absolute control from its last episode.
++        # Native settling uses delta zero commands; switch to absolute only after.
++        if self.cfg.get("xvla_absolute_control", False):
++            self.env.set_controller_delta(True, id=env_idx)
++        self._xvla_finished[env_idx] = False
++        self._xvla_reset_mask[env_idx] = True
+         # Preserve LIBERO's existing 15-step settling behavior unless a model
+         # explicitly requests a different reset wait (FastWAM uses 30).
+         num_steps_wait = int(self.cfg.get("num_steps_wait", 15))
+@@ -856,6 +877,11 @@
+             raw_obs, _reward, terminations, info_lists = self.env.step(
+                 zero_actions, env_idx
+             )
++        if num_steps_wait <= 0:
++            raise ValueError("LIBERO reset requires at least one settling step")
++        self._xvla_settling_steps[env_idx] += num_steps_wait
++        if self.cfg.get("xvla_absolute_control", False):
++            self.env.set_controller_delta(False, id=env_idx)
+         if self.current_raw_obs is None:
+             self.current_raw_obs = [None] * self.num_envs
+         for i, idx in enumerate(env_idx):
+@@ -899,8 +925,53 @@
+             depth=depth,
+         )
+ 
++    def _step_xvla(self, actions, auto_reset=True, _skip_obs_wrap=False):
++        """Execute only active slots, never post-done or past the horizon.
++
++        Unexecuted chunk suffixes retain observation and have zero reward. The
++        collector receives an explicit execution mask, not fictitious env steps.
++        """
++        if isinstance(actions, torch.Tensor):
++            actions = actions.detach().cpu().numpy()
++        active = (~self._xvla_finished) & (self.elapsed_steps < self.cfg.max_episode_steps)
++        self._xvla_executed = active.copy()
++        indices = np.flatnonzero(active)
++        raw_obs = list(self.current_raw_obs)
++        terminations = np.zeros(self.num_envs, dtype=bool)
++        info_lists = [{} for _ in range(self.num_envs)]
++        if len(indices):
++            stepped_obs, _reward, stepped_done, stepped_info = self.env.step(actions[indices], indices)
++            for slot, index in enumerate(indices):
++                raw_obs[index] = stepped_obs[slot]
++                terminations[index] = stepped_done[slot]
++                info_lists[index] = stepped_info[slot]
++            self._elapsed_steps[indices] += 1
++            self._xvla_policy_steps[indices] += 1
++        self.current_raw_obs = raw_obs
++        truncations = active & (self.elapsed_steps >= self.cfg.max_episode_steps)
++        obs = None if _skip_obs_wrap else self._wrap_obs(raw_obs)
++        step_reward = self._calc_step_reward(terminations)
++        # Unexecuted suffixes are absent transitions; a relative-reward
++        # implementation must not subtract a prior terminal reward here.
++        step_reward[~active] = 0.0
++        infos = list_of_dict_to_dict_of_list(info_lists) if len(indices) == self.num_envs else {}
++        infos = self._record_metrics(step_reward, terminations, infos)
++        infos["episode"]["policy_env_steps"] = to_tensor(self._xvla_policy_steps.copy())
++        infos["episode"]["settling_env_steps"] = to_tensor(self._xvla_settling_steps.copy())
++        if self.ignore_terminations:
++            infos["episode"]["success_at_end"] = to_tensor(terminations)
++            terminations[:] = False
++        dones = terminations | truncations
++        self._xvla_finished |= dones
++        if dones.any() and auto_reset and self.auto_reset:
++            obs, infos, _ = self._handle_auto_reset(dones, obs, infos)
++        return (obs, to_tensor(step_reward), to_tensor(terminations),
++                to_tensor(truncations), infos)
++
+     def step(self, actions=None, auto_reset=True, _skip_obs_wrap=False):
+         """Step the environment with the given actions."""
++        if self.cfg.get("xvla_strict_episodes", False):
++            return self._step_xvla(actions, auto_reset, _skip_obs_wrap)
+         if isinstance(actions, torch.Tensor):
+             actions = actions.detach().cpu().numpy()
+ 
+@@ -941,6 +1012,7 @@
+         raw_chunk_terminations = []
+         raw_chunk_truncations = []
+         rendering_disabled = False
++        xvla_execution_masks = []
+         try:
+             for i in range(chunk_size):
+                 should_render = (not self.skip_intermediate_renders) or (
+@@ -963,6 +1035,8 @@
+                         actions, auto_reset=False, _skip_obs_wrap=not should_render
+                     )
+                 )
++                if self.cfg.get("xvla_strict_episodes", False):
++                    xvla_execution_masks.append(to_tensor(self._xvla_executed.copy()))
+                 obs_list.append(extracted_obs)
+                 infos_list.append(infos)
+ 
+@@ -1024,6 +1098,10 @@
+         else:
+             chunk_terminations = raw_chunk_terminations.clone()
+             chunk_truncations = raw_chunk_truncations.clone()
++        if self.cfg.get("xvla_strict_episodes", False):
++            executed_mask = torch.stack(xvla_execution_masks, dim=1).bool()
++            infos_list[-1]["executed_mask"] = executed_mask
++            valid_action_mask = executed_mask
+         if not self.is_eval:
+             infos_list[-1]["valid_action_mask"] = valid_action_mask
+         return (
+--- a/rlinf/envs/sim/libero/venv.py
++++ b/rlinf/envs/sim/libero/venv.py
+@@ -89,6 +89,41 @@
+     for name in LIBERO_CAMERA_OBS_NAMES:
+         if name in observables:
+             observables[name]._enabled = enabled
++
++
++def _controllers(env):
++    """Find the same robosuite controllers used by the native LIBERO client."""
++    rob = getattr(env, "env", env)
++    while hasattr(rob, "env"):
++        rob = rob.env
++    result = []
++    for robot in rob.robots:
++        controller = robot.controller
++        result.extend(controller.values() if isinstance(controller, dict) else [controller])
++    if not result:
++        raise RuntimeError("No robosuite controllers found for X-VLA absolute control")
++    return result
++
++
++def _set_controller_delta(env, enabled):
++    for controller in _controllers(env):
++        if not hasattr(controller, "use_delta"):
++            raise RuntimeError("Controller lacks native X-VLA use_delta contract")
++        controller.use_delta = bool(enabled)
++
++
++def _measured_xvla_proprio(env):
++    """Native client: measured controller xyz + first two rotation columns."""
++    controller = _controllers(env)[0]
++    position = np.asarray(controller.ee_pos, dtype=np.float32)
++    rotation = np.asarray(controller.ee_ori_mat, dtype=np.float32)
++    if position.shape != (3,) or rotation.shape != (3, 3):
++        raise RuntimeError("Unexpected controller EEF state shape")
++    proprio = np.zeros(20, dtype=np.float32)
++    proprio[:3] = position
++    proprio[3:6] = rotation[:, 0]
++    proprio[6:9] = rotation[:, 1]
++    return proprio
+ 
+ 
+ def _worker(
+@@ -159,6 +194,11 @@
+                 p.send(getattr(env, data) if hasattr(env, data) else None)
+             elif cmd == "setattr":
+                 setattr(env.unwrapped, data["key"], data["value"])
++            elif cmd == "set_controller_delta":
++                _set_controller_delta(env, data)
++                p.send(None)
++            elif cmd == "measured_xvla_proprio":
++                p.send(_measured_xvla_proprio(env))
+             elif cmd == "check_success":
+                 p.send(env.check_success())
+             elif cmd == "get_segmentation_of_interest":
+@@ -284,3 +324,19 @@
+             self.workers[i].parent_remote.send(["set_camera_rendering", enabled])
+         for i in id:
+             self.workers[i].parent_remote.recv()
++
++
++    def set_controller_delta(self, enabled: bool, id=None):
++        self._assert_is_not_closed()
++        indices = self._wrap_id(id)
++        for index in indices:
++            self.workers[index].parent_remote.send(["set_controller_delta", enabled])
++        for index in indices:
++            self.workers[index].parent_remote.recv()
++
++    def measured_xvla_proprio(self, id=None):
++        self._assert_is_not_closed()
++        indices = self._wrap_id(id)
++        for index in indices:
++            self.workers[index].parent_remote.send(["measured_xvla_proprio", None])
++        return np.stack([self.workers[index].parent_remote.recv() for index in indices])
+--- a/rlinf/workers/env/env_worker.py
++++ b/rlinf/workers/env/env_worker.py
+@@ -494,10 +494,9 @@
+                 intervene_actions=intervene_actions,
+                 intervene_flags=intervene_flags,
+                 rlt_switch_flags=rlt_switch_flags,
+-                executed_mask=infos["executed_mask"]
+-                if SupportedEnvType(self.cfg.env.train.env_type)
+-                is SupportedEnvType.SIMPLE
+-                else None,
++                # Environments opt in by emitting the mask. LIBERO only does
++                # so under xvla_strict_episodes; other models stay unchanged.
++                executed_mask=infos.get("executed_mask"),
+             ),
+         )
+         chunk_step_payload = {
+--- a/rlinf/scheduler/cluster/cluster.py
++++ b/rlinf/scheduler/cluster/cluster.py
+@@ -46,6 +46,50 @@
+ if TYPE_CHECKING:
+     from ..manager import Manager
+     from ..worker import Worker
++
++
++def _xvla_isolated_ray_kwargs():
++    """Build a bounded job-local Ray configuration without changing GPU visibility."""
++    if os.environ.get("RLINF_XVLA_ISOLATED_RAY") != "1":
++        return None
++    import json
++
++    job_id = os.environ.get("SLURM_JOB_ID")
++    if not job_id:
++        raise RuntimeError("Isolated X-VLA Ray requires a Slurm allocation")
++    allocated_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", "0"))
++    requested_cpus = int(os.environ.get("RLINF_XVLA_RAY_CPUS", str(allocated_cpus)))
++    if not 1 <= requested_cpus <= allocated_cpus:
++        raise ValueError("Ray CPUs must be positive and bounded by SLURM_CPUS_PER_TASK")
++    visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
++    gpu_ids = [item.strip() for item in visible.split(",") if item.strip()]
++    if any(item in {"-1", "NoDevFiles"} for item in gpu_ids):
++        gpu_ids = []
++    store_bytes = int(os.environ.get("RLINF_XVLA_RAY_OBJECT_STORE_BYTES", str(2 * 1024**3)))
++    if not 80 * 1024**2 <= store_bytes <= 2 * 1024**3:
++        raise ValueError("X-VLA Ray object store must be bounded between 80 MiB and 2 GiB")
++    temp_value = os.environ.get("RAY_TMPDIR")
++    spill_value = os.environ.get("FYP_XVLA_RAY_SPILL")
++    if not temp_value or not spill_value:
++        raise RuntimeError("Set job-private RAY_TMPDIR and FYP_XVLA_RAY_SPILL")
++    temp_dir, spill_dir = Path(temp_value), Path(spill_value)
++    for label, directory in (("Ray temp", temp_dir), ("Ray spill", spill_dir)):
++        if not directory.is_absolute() or job_id not in str(directory):
++            raise ValueError(f"{label} path must be absolute and contain the Slurm job ID")
++        directory.mkdir(parents=True, exist_ok=True)
++    return {
++        "address": "local",
++        "num_cpus": requested_cpus,
++        "num_gpus": len(gpu_ids),
++        "object_store_memory": store_bytes,
++        "include_dashboard": False,
++        "_temp_dir": str(temp_dir),
++        "_system_config": {
++            "object_spilling_config": json.dumps({
++                "type": "filesystem", "params": {"directory_path": str(spill_dir)}
++            })
++        },
++    }
+ 
+ 
+ class ClusterEnvVar(str, Enum):
+@@ -330,32 +374,45 @@
+             Cluster._prepare_ray_code_sync_runtime_env_fragment()
+         )
+ 
+-        try:
+-            # First try to connect to an existing Ray cluster
+-            ray_init_kwargs: dict[str, Any] = {
+-                "address": "auto",
+-                "logging_level": Cluster.LOGGING_LEVEL,
+-                "namespace": Cluster.NAMESPACE,
+-            }
+-            if self._ray_code_sync_fragment is not None:
+-                ray_init_kwargs["runtime_env"] = dict(self._ray_code_sync_fragment)
+-                py_mods = ray_init_kwargs["runtime_env"].get("py_modules") or ()
+-                self._logger.info(
+-                    "%s Ray code sync is enabled (py_modules=%r); workers receive "
+-                    "only the rlinf package from the launch node. Disable with %s=0.",
+-                    Cluster.SYS_NAME,
+-                    tuple(py_mods),
+-                    Cluster.get_full_env_var_name(ClusterEnvVar.CODE_WORKING_DIR),
+-                )
+-            ray.init(**ray_init_kwargs)
+-        except ConnectionError:
++        isolated_kwargs = _xvla_isolated_ray_kwargs()
++        if isolated_kwargs is not None:
++            if self._num_nodes not in (0, 1):
++                raise ValueError("Isolated X-VLA Ray supports one allocated node only")
+             ray_init_kwargs = {
+                 "logging_level": Cluster.LOGGING_LEVEL,
+                 "namespace": Cluster.NAMESPACE,
++                **isolated_kwargs,
+             }
+             if self._ray_code_sync_fragment is not None:
+                 ray_init_kwargs["runtime_env"] = dict(self._ray_code_sync_fragment)
+             self._start_local_ray(ray_init_kwargs)
++        else:
++            try:
++                # First try to connect to an existing Ray cluster
++                ray_init_kwargs: dict[str, Any] = {
++                    "address": "auto",
++                    "logging_level": Cluster.LOGGING_LEVEL,
++                    "namespace": Cluster.NAMESPACE,
++                }
++                if self._ray_code_sync_fragment is not None:
++                    ray_init_kwargs["runtime_env"] = dict(self._ray_code_sync_fragment)
++                    py_mods = ray_init_kwargs["runtime_env"].get("py_modules") or ()
++                    self._logger.info(
++                        "%s Ray code sync is enabled (py_modules=%r); workers receive "
++                        "only the rlinf package from the launch node. Disable with %s=0.",
++                        Cluster.SYS_NAME,
++                        tuple(py_mods),
++                        Cluster.get_full_env_var_name(ClusterEnvVar.CODE_WORKING_DIR),
++                    )
++                ray.init(**ray_init_kwargs)
++            except ConnectionError:
++                ray_init_kwargs = {
++                    "logging_level": Cluster.LOGGING_LEVEL,
++                    "namespace": Cluster.NAMESPACE,
++                }
++                if self._ray_code_sync_fragment is not None:
++                    ray_init_kwargs["runtime_env"] = dict(self._ray_code_sync_fragment)
++                self._start_local_ray(ray_init_kwargs)
+ 
+         # Ray log collector
+         if distributed_log_dir is not None:
+@@ -498,6 +555,11 @@
+ 
+     def _init_from_existing_managers(self):
+         if not ray.is_initialized():
++            if os.environ.get("RLINF_XVLA_ISOLATED_RAY") == "1":
++                raise RuntimeError(
++                    "X-VLA worker must already belong to its allocated job's Ray context; "
++                    "refusing address=auto"
++                )
+             ray.init(
+                 address="auto",
+                 namespace=Cluster.NAMESPACE,

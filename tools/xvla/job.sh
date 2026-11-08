@@ -31,7 +31,7 @@ case "$mode" in
  alignment) python -m xvla_rlinf.smoke alignment ;;
  native_eval) python -m xvla_rlinf.entry --config-name native_eval_smoke ;;
  ppo|grpo) python -m xvla_rlinf.entry --config-name "${mode}_smoke" ;;
- sft) python -m xvla_rlinf.sft_entry --config-name sft_smoke ;;
+ sft) python -m xvla_rlinf.sft_entry --config-path "$repo/configs/xvla" --config-name sft_smoke ;;
  *) exit 2 ;;
 esac
 echo XVLA_JOB_PASS
