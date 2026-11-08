@@ -51,7 +51,7 @@ class HydraCompositionTests(unittest.TestCase):
         self.addCleanup(self.environ.stop)
 
     def test_all_primary_configs_compose_and_resolve(self):
-        for name in ("ppo_smoke", "grpo_smoke", "grpo_exploration_smoke", "native_eval_smoke", "stochastic_eval_smoke", "sft_smoke"):
+        for name in ("ppo_smoke", "grpo_smoke", "grpo_exploration_smoke", "grpo_stress_smoke", "native_eval_smoke", "stochastic_eval_smoke", "sft_smoke"):
             with self.subTest(name=name):
                 cfg = compose_config(name)
                 self.assertEqual(cfg.actor.model.model_type, "xvla")
@@ -154,7 +154,7 @@ print(json.dumps({'registry': 'PASS', 'role': os.environ['XVLA_TEST_ROLE']}))
         class LogicalSingleGpuPlacement:
             def __init__(self, *args, **kwargs): pass
             def get_world_size(self, component): return 1
-        for name in ("ppo_smoke", "grpo_smoke", "grpo_exploration_smoke", "native_eval_smoke", "stochastic_eval_smoke", "sft_smoke"):
+        for name in ("ppo_smoke", "grpo_smoke", "grpo_exploration_smoke", "grpo_stress_smoke", "native_eval_smoke", "stochastic_eval_smoke", "sft_smoke"):
             with self.subTest(name=name):
                 cfg = compose_config(name)
                 with patch.object(config, "Cluster", LogicalSingleGpuCluster), patch.object(config, "HybridComponentPlacement", LogicalSingleGpuPlacement):

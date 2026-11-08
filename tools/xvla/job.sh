@@ -64,11 +64,11 @@ case "$mode" in
      --source-sha256 "$source_hash" --seed "$selection_seed" --demonstrations "$demonstrations" \
      2>&1 | tee "$XVLA_RUN_DIR/convert.log"
    python -m xvla_rlinf.sft inspect "$converted_dir/manifest.json" ;;
- ppo|grpo|grpo_exploration) python -m xvla_rlinf.entry --config-name "${mode}_smoke" ;;
+ ppo|grpo|grpo_exploration|grpo_stress) python -m xvla_rlinf.entry --config-name "${mode}_smoke" ;;
  sft) python -m xvla_rlinf.sft_entry --config-path "$repo/configs/xvla" --config-name sft_smoke ;;
  *) exit 2 ;;
 esac
-if [[ "$mode" == ppo || "$mode" == grpo || "$mode" == grpo_exploration || "$mode" == sft ]]; then
+if [[ "$mode" == ppo || "$mode" == grpo || "$mode" == grpo_exploration || "$mode" == grpo_stress || "$mode" == sft ]]; then
   python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$XVLA_RUN_DIR/${mode}-smoke/checkpoints/global_step_1/actor"
 fi
 echo XVLA_JOB_PASS
