@@ -85,8 +85,56 @@ class XVLASftWorker(FSDPVlaSftWorker):
         self._xvla_steps+=1
         return result
 
+    def _save_resume_counters(self, save_path):
+        # Native data.pt owns loader/sampler cursors and rng.pt owns RNGs. These
+        # worker counters are also needed when RLinf advances to the next epoch.
+        state={'rank':self._rank,'world_size':self._world_size,
+               'data_epoch':int(self._data_epoch),'data_iter_offset':int(self._data_iter_offset),
+               'optimizer_steps':int(self.optimizer_steps),
+               'manifest_sha256':self.data_config['manifest_sha256'],
+               'micro_batch_size':int(self.micro_batch_size),
+               'sampler_epoch':int(self.data_loader.sampler.epoch)}
+        states=[None]*self._world_size
+        torch.distributed.all_gather_object(states,state)
+        if self._rank==0:
+            path=Path(save_path)/'xvla_sft_data_state.json'
+            temporary=path.with_suffix('.json.tmp')
+            temporary.write_text(json.dumps({'version':1,'ranks':states},indent=2)+'\n')
+            temporary.replace(path)
+        torch.distributed.barrier()
+
+    def load_checkpoint(self, load_path):
+        record=json.loads((Path(load_path)/'xvla_sft_data_state.json').read_text())
+        if record.get('version')!=1 or len(record.get('ranks',[]))!=self._world_size:
+            raise ValueError('SFT worker resume requires the original distributed topology')
+        state=record['ranks'][self._rank]
+        expected={'rank':self._rank,'world_size':self._world_size,
+                  'manifest_sha256':self.data_config['manifest_sha256'],
+                  'micro_batch_size':int(self.micro_batch_size)}
+        if any(state.get(key)!=value for key,value in expected.items()):
+            raise ValueError('SFT dataset identity, microbatch or rank changed during resume')
+        for key in ('data_epoch','data_iter_offset','optimizer_steps','sampler_epoch'):
+            if type(state.get(key)) is not int or state[key]<0:
+                raise ValueError('Invalid SFT worker resume counter: '+key)
+        if state['sampler_epoch']!=state['data_epoch']:
+            raise ValueError('Saved SFT worker epoch differs from sampler epoch')
+        # The parent immediately creates iter(loader) after loading native
+        # data.pt. Restore epoch BEFORE that operation, and never set_epoch
+        # afterwards: doing so could discard its just-restored cursor.
+        self.data_loader.sampler.set_epoch(state['sampler_epoch'])
+        super().load_checkpoint(load_path)
+        if self.data_loader.sampler.epoch!=state['sampler_epoch']:
+            raise RuntimeError('Native SFT loader state restored a different sampler epoch')
+        self._data_epoch=state['data_epoch']
+        self._data_iter_offset=state['data_iter_offset']
+        self.optimizer_steps=state['optimizer_steps']
+        if getattr(self,'_xvla_audit',False) and self._xvla_steps==0:
+            self._xvla_initial=self._model_fingerprints()
+        self._audit_write('data_resume',checkpoint=str(load_path),**state)
+
     def save_checkpoint(self, save_path, step=0):
         super().save_checkpoint(save_path,step)
+        self._save_resume_counters(save_path)
         if self._xvla_audit:
             expected=self._model_fingerprints()
             # A deliberate temporary perturbation proves load really restores a
@@ -99,7 +147,7 @@ class XVLASftWorker(FSDPVlaSftWorker):
                         break
                 else:
                     raise RuntimeError('No trainable parameter for native checkpoint roundtrip probe')
-            super().load_checkpoint(save_path)
+            self.load_checkpoint(save_path)
             actual=self._model_fingerprints()
             passed=actual==expected
             self._audit_write('native_checkpoint_roundtrip',passed=passed,checkpoint=str(save_path),

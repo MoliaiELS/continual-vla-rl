@@ -27,7 +27,7 @@ def main():
     p.add_argument('--convert-demonstrations',type=int,choices=[1,2],default=1)
     p.add_argument('--seed',type=int,default=1234)
     a=p.parse_args()
-    if a.mode in ('alignment','native_eval','stochastic_eval','convert','sft','ppo','grpo') and a.gpus!=1:
+    if a.mode not in ('unit','imports') and a.gpus!=1:
         raise ValueError('Model, simulation and online audit smoke modes require exactly one GPU')
     conversion=None
     extra=[]

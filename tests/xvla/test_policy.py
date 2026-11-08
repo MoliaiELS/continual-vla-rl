@@ -150,6 +150,17 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(actual, expected)
         self.assertTrue(any(name.startswith("value_head.") for name in actual))
 
+    def test_ratio_gate_covers_later_microbatches_before_first_update(self):
+        policy=self.make_policy()
+        policy.xcfg['audit_gradients']=True
+        _,sampled=policy.predict_action_batch(self.obs(),mode='train')
+        policy._audit_first_recompute=False
+        sampled['forward_inputs']['sampled_logprobs'].add_(.1)
+        with self.assertRaisesRegex(RuntimeError,'pre-update chunk'):
+            policy(forward_inputs=sampled['forward_inputs'])
+        policy._audit_initial_optimizer_pending=False
+        policy(forward_inputs=sampled['forward_inputs'])
+
     def test_observation_conditioned_values_ignore_sample_noise(self):
         import torch
         policy = self.make_policy()

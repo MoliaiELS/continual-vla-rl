@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import os
+import itertools
 from pathlib import Path
 from typing import Any
 
@@ -273,6 +274,62 @@ class OfficialSftCollator:
                 "action": torch.from_numpy(np.stack([sample["action"] for sample in samples])).float()}
 
 
+class EpochCursorSampler:
+    """Add exact epoch/cursor state to an ordinary DistributedSampler.
+
+    StatefulDataLoader recognizes the state_dict/load_state_dict protocol and
+    snapshots this state together with its batch/worker progress. The wrapped
+    sampler still defines ordering and distributed padding. Merely skipping N
+    indices of a newly created epoch-zero sampler cannot resume a later epoch.
+    """
+
+    def __init__(self, sampler):
+        self.sampler = sampler
+        self.epoch = int(sampler.epoch)
+        self.yielded = 0
+        self._resume_cursor = None
+
+    def __len__(self):
+        # Full epoch length is required by RLinf's scheduler/epoch accounting.
+        return len(self.sampler)
+
+    def __iter__(self):
+        start = self._resume_cursor if self._resume_cursor is not None else 0
+        self._resume_cursor = None
+        self.yielded = start
+        for index in itertools.islice(iter(self.sampler), start, None):
+            self.yielded += 1
+            yield index
+
+    def set_epoch(self, epoch):
+        epoch = int(epoch)
+        if epoch < 0:
+            raise ValueError("Sampler epoch cannot be negative")
+        self.sampler.set_epoch(epoch)
+        if epoch != self.epoch:
+            self._resume_cursor = None
+            self.yielded = 0
+        self.epoch = epoch
+
+    def _identity(self):
+        return {"dataset_size": len(self.sampler.dataset),
+                **{key: getattr(self.sampler, key) for key in
+                   ("num_replicas", "rank", "seed", "shuffle", "drop_last")}}
+
+    def state_dict(self):
+        return {"version": 1, "epoch": self.epoch, "yielded": self.yielded,
+                "identity": self._identity()}
+
+    def load_state_dict(self, state):
+        if state.get("version") != 1 or state.get("identity") != self._identity():
+            raise ValueError("SFT sampler identity/topology changed; exact data resume is unavailable")
+        epoch, cursor = state.get("epoch"), state.get("yielded")
+        if type(epoch) is not int or type(cursor) is not int or epoch < 0 or not 0 <= cursor <= len(self):
+            raise ValueError("Invalid SFT sampler epoch/cursor")
+        self.sampler.set_epoch(epoch)
+        self.epoch, self.yielded, self._resume_cursor = epoch, cursor, cursor
+
+
 def build_xvla_sft_dataloader(cfg, world_size: int, rank: int, data_paths, eval_dataset: bool = False):
     import torch
     from torch.utils.data import DistributedSampler
@@ -291,7 +348,8 @@ def build_xvla_sft_dataloader(cfg, world_size: int, rank: int, data_paths, eval_
     dataset = ConvertedLiberoDataset(data_paths, horizon=int(model_cfg["num_actions"]))
     processor = XVLAProcessor.from_pretrained(str(model_path), trust_remote_code=False, local_files_only=True)
     seed = int(cfg.actor.seed)
-    sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=seed)
+    sampler = EpochCursorSampler(DistributedSampler(
+        dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=seed))
     batch = int(cfg.actor.micro_batch_size)
     if len(sampler) < batch:
         raise ValueError("Too few usable windows for one microbatch")

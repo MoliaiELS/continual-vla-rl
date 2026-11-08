@@ -37,6 +37,7 @@ class XVLAPolicy(nn.Module, BasePolicy):
         self._history_batch_size = None
         self.global_step = 0
         self._audit_first_recompute = True
+        self._audit_initial_optimizer_pending = True
         self.sampler = TerminalCleanGaussianSampler(
             pos_std=float(self.xcfg.get('position_std',.003)),
             rotation_std=float(self.xcfg.get('rotation_std',.01)),
@@ -187,6 +188,10 @@ class XVLAPolicy(nn.Module, BasePolicy):
                    'chunk_ratio_min':float(ratio.min()),'chunk_ratio_max':float(ratio.max())}),flush=True)
             if self._audit_first_recompute and error>float(self.xcfg.get('logprob_tolerance',1e-3)):
                 raise RuntimeError('Initial actor logprob does not reproduce behavior policy')
+            if self._audit_initial_optimizer_pending:
+                tolerance=float(self.xcfg.get('initial_ratio_tolerance',.01))
+                if not bool(torch.isfinite(ratio).all()) or bool(((ratio-1).abs()>tolerance).any()):
+                    raise RuntimeError('A pre-update chunk likelihood ratio exceeds the configured numerical tolerance')
             self._audit_first_recompute=False
             if logprobs.requires_grad:
                 def record_actor_gradient(gradient):

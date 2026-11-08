@@ -94,6 +94,7 @@ actor:
       gripper_logit_std: 0.15
       audit_gradients: true
       logprob_tolerance: 0.001
+      initial_ratio_tolerance: 0.01 # all microbatches before the first optimizer step
   optim:
     lr: 1.0e-6
     value_lr: 1.0e-5

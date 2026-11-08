@@ -75,6 +75,9 @@ class AuditedActor(EmbodiedFSDPActor):
         actor_norms = {name:norm for name,norm in gradients.items()
                        if 'core.' in name and 'transformer.' in name}
         result = super().optimizer_step()
+        policy=unwrapped(self.model)
+        if hasattr(policy,'_audit_initial_optimizer_pending'):
+            policy._audit_initial_optimizer_pending=False
         changes = {name:float((p.detach()-before[name]).abs().max()) for name,p in names.items()}
         record('optimizer', rank=self._rank, step=self.optimizer_steps,
                gradients=gradients, actor_transformer_gradient_norms=actor_norms,
