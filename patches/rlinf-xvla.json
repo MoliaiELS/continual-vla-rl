@@ -40,8 +40,8 @@
     {
       "path": "rlinf/hybrid_engines/fsdp/strategy/fsdp.py",
       "before_sha256": "3849e4761fecb8c35a37c70e917ce9a668fc96a8d1f1df81e7c39dfa650948f9",
-      "after_sha256": "57e6c58e2f3e764d4187c8639f7915393fa8bacbfbdbbda55bcca042675b6c42"
+      "after_sha256": "3fbe2b82d3c37e5cb0ac5871d7bbdaef3dd13eef3b806ee93fd767952cd18a4a"
     }
   ],
-  "patch_sha256": "21b75867930f67826d70873abee81a51b873fb005ce09e0bc0b7b2a55b1131b8"
+  "patch_sha256": "546da75b3b850624a8549571106f04889a018f7b52c373f28388fabfbd1c9a62"
 }
