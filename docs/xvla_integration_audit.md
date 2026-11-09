@@ -1,6 +1,6 @@
 # X-VLA 接入审计与验收
 
-记录日期：2026-11-08。已取得固定权重原生计算对齐、真实 LIBERO rollout 和一次真实 PPO 更新证据；其余验收按下表记录。`PASS` 只覆盖对应测试范围，不能外推为算法有效或论文性能复现。
+更新于 2026-11-09。固定权重原生计算对齐、真实 LIBERO rollout 和一次真实 PPO 更新已通过。各项 `PASS` 只覆盖表中列出的验收范围。
 
 ## 固定身份与工作边界
 
@@ -44,6 +44,7 @@ vendor 位于明确命名空间 `xvla_rlinf.vendor.xvla`，保留 Apache-2.0 许
 | 终止/后缀 | 严格模式只执行 active 环境，不执行 post-done 或超过 horizon 的动作；未执行槽位 reward0，发布 `executed_mask[B,C]`，旧 logprob 和重算 logprob 一致 mask 后再 sum |
 | Ray | 仅 `RLINF_XVLA_ISOLATED_RAY=1` 时新建本作业 local Ray，object store ≤2GiB、CPU ≤Slurm配额、GPU来自保留的 CUDA mask，临时目录和 spill 独立；不自动连接别人的 Ray |
 | GPU 枚举 | 新增第7处 opt-in 补丁，将 NVML 物理枚举限制到 Slurm 原 mask；placement 使用 allocation-local ordinal，CUDA 保留原数字/UUID token；EGL 必须查询实际映射，不猜测未获配卡 |
+| 单卡 FSDP | `xvla_ignore_frozen_parameters:true` 仅用于一 rank、FP32、NO_SHARD、use_orig_params、无 FSDP CPU offload 且关闭子模块自动包装的 X-VLA。完整模型先迁到当前 rank 设备，再将冻结参数排除在 FSDP flat parameter 之外。冻结权重仍注册在模型中并纳入全状态校验 |
 
 参数范围为 `full`、`lora_heads`、`prompt_heads`。三类 prompt/action 子树显式纳入，包括 DomainAwareLinear 的 Embedding；RLinf factory 的二次 LoRA 注入被拒绝。只训练domain rows时使用独立selected-row Parameter与冻结完整buffer，其他行不进入optimizer，因此不受AdamW weight decay或历史动量影响。真实已验证的训练范围见下文；不能把小模型scope单元测试外推为所有大模型范围的训练通过。
 
@@ -55,7 +56,7 @@ SFT 调用官方 clean-action 监督及权重，不以 velocity loss 代替。�
 
 | 项目 | 当前 smoke 配置 |
 | --- | --- |
-| 模型 / dtype | 固定 Libero 权重；float32；不启用 compile、CUDA graph、gradient checkpointing |
+| 模型 / dtype | 固定权重、float32，关闭 compile 和 CUDA graph。GRPO 压力验证可对 actor 重算的每次 clean-action transformer 调用启用非重入激活重算 |
 | 推理 | domain3、clean-action steps10；chunk30，加载时必须与 checkpoint horizon 核对 |
 | 原生 / 噪声对照 | `native_eval_smoke` / `stochastic_eval_smoke`，同初态与800步 horizon，rollout transport810步，严格 mask 最后未执行10槽 |
 | PPO | 2个环境、300真实步上限、1次 update、prompt/action domain3 rows，观测条件 value head |
@@ -91,9 +92,13 @@ RL sampler 为本项目明确命名的 `terminal_clean_gaussian_v1`，在完整�
 | 19346 | FAIL，已修复审计 | Pt真实SFT已到backward/optimizer；瞬态named_parameters造成image_projection键缺失；改用原生完整state稳定键，不算本次已通过 |
 | 19347 | FAIL，已修复测试 | 115项中1项误断言TorchData私有字段非空；改为核验全部剩余batch与epoch |
 | 19348 | FAIL，封装修复待验 | 压力配置σpos=.04/σrot=.12/σgrip=.6，8回合两组真实回报[0,0,1,1]、[0,1,1,1]，方差.25/.1875；第一次backward后第二次FSDP前向view写回失败，未完成optimizer |
-| 19352 | PASS | 最新125项全部通过、无SKIP；含真实TorchData跨epoch余序列、稳定完整state审计、算法白名单及GPU预算 |
-| 19353 | BLOCKED（取回日志） | 修复后的Pt SFT已提交；后来19354已进入RUNNING，说明19353不再活跃，但不能推断成功/失败；需读取最终日志和checkpoint_check.json |
-| 19354 | BLOCKED（取回日志） | 同一压力配置、单根FSDP重跑；最后确认RUNNING，网络中断后未取得最终日志，不声称更新/恢复通过 |
+| 19352 | PASS | 125项全部通过、无SKIP，含真实TorchData跨epoch余序列、稳定完整state审计、算法白名单及GPU预算 |
+| 19353 | FAIL | 88秒，Pt SFT 到达优化步骤后原生完整 state 导出因缺少冻结的 `core.vlm.image_projection` 抛出 AssertionError |
+| 19354 | FAIL | 150秒，真实组回报 [0,1,0,0] 和 [1,1,1,1]，方差 .1875 和 0，有信息组比例 50%。单根 FSDP 在 actor backward 触发 CUDA OOM，未完成 optimizer |
+| 19405 | FAIL，已修复测试 | GPU 映射测试把 patch manifest 文件数写死为 7，新增 FSDP 补丁后 setUpClass 失败。新增的激活重算 logprob 和梯度等价测试通过 |
+| 19406 | NOT RUN | 排队时发现固定版本 wrap policy 对空列表仍可返回包装函数，已取消尚未启动的 SFT，改由 19407 运行显式禁用子模块自动包装的配置 |
+| 19407 | BLOCKED（Slurm 排队） | X-VLA-Pt SFT 小测，1 张 4090，固定提交 `fedcdf2d` |
+| 19408 | BLOCKED（Slurm 排队） | X-VLA-Libero GRPO 压力小测，1 张 4090，固定提交 `fedcdf2d` |
 
 原生/PPO视频已复制到本机 `.local/xvla-evidence/`；原生视频 `native-19336.mp4`。PPO的机器可读摘要为 `.local/xvla-evidence/ppo19339_summary.json`，保留逐行日志及TensorBoard来源。
 
@@ -101,22 +106,22 @@ RL sampler 为本项目明确命名的 `terminal_clean_gaussian_v1`，在完整�
 
 | 条目 | 当前状态 | 已有证据 / 尚需证据 |
 | --- | --- | --- |
-| A 注册、预处理、旋转/夹爪、batch/mask/history/reset | PASS（已测范围） | 19352真实Torch全125项PASS；19336真实控制器/回合验证。自动reset、重建所有分支主要为替身测试，不冒充全部仿真覆盖 |
+| A 注册、预处理、旋转/夹爪、batch/mask/history/reset | PASS（已测范围） | 19352真实Torch全125项PASS，19336真实控制器/回合验证。自动reset、重建分支主要为替身测试。19405运行了116项，另有GPU映射测试类初始化失败。该类10项在 `b2fa4b9b` 修复后本机通过，最终提交的完整Slurm套件待重跑 |
 | B 固定噪声原生一致性、真实短 rollout | PASS | 19344独立原生processor/raw/7D全部误差0；19336真实2回合成功与视频 |
-| C 真实小 batch SFT、冻结组、保存重载 | BLOCKED（19353结果未知） | 1条成功demo、86个官方窗口；19346已执行真实SFT但审计失败，不算通过。19353的冻结hash/重载/独立进程证据需网络恢复后读取 |
+| C 真实小 batch SFT、冻结组、保存重载 | FAIL（19353），修复验收 BLOCKED | 1条成功demo、86个官方窗口。19353在全状态导出时失败，19407排队等待GPU |
 | D 更新前 old/recompute、ratio≈1、解析概率梯度 | PASS（近似数值一致） | 19339有效chunk ratio 0.995446–1.001728；最大chunk logdiff .0045643。解析Gaussian/score梯度独立例子PASS；float32批大小2与micro1产生小差异，未声称逐bit一致 |
-| E 更新后 actor→rollout、checkpoint | PPO同worker PASS；独立进程 BLOCKED | 19339完整state hash及同噪声probe匹配，保存后故意扰动参数再经原生DCP恢复；19353/19354新进程checker结果未取回，完整新worker恢复NOT RUN |
-| F 真实在线 reward→advantage→actor梯度→step→sync→新rollout | PPO PASS；GRPO BLOCKED（待19354） | 19339五个action/prompt组有非零actor梯度与实际变化；19343/19345全胜拒绝更新；19348有真实相对优势但FSDP失败；19354结果未知 |
-| G 全循环资源与计数 | PPO已测；完整设备峰值部分NOT RUN | 19339 Slurm331秒、0.091944 GPUh；actor allocator峰值14.562GiB，5秒采样本作业compute进程合计21492MiB。该值未含所有EGL显存，后续版本另记录获配设备总使用 |
+| E 更新后 actor→rollout、checkpoint | PPO同worker PASS；独立进程 NOT RUN | 19339完整state hash及同噪声probe匹配，保存后故意扰动参数再经原生DCP恢复。19353/19354未进入新进程checker |
+| F 真实在线 reward→advantage→actor梯度→step→sync→新rollout | PPO PASS，GRPO FAIL（19354），修复验收 BLOCKED | 19339五个action/prompt组有非零actor梯度与实际变化。19354有真实相对优势，actor backward OOM，19408排队等待GPU |
+| G 全循环资源与计数 | PPO已测，SFT/GRPO完整循环待验 | 19339 Slurm331秒、0.091944 GPUh，actor allocator峰值14.562GiB，5秒采样本作业compute进程合计21492MiB。19353/19354分别分配88/150秒，获配设备5秒采样峰值8666/18079MiB，GRPO的采样值未覆盖OOM瞬时峰值 |
 | H 相关旧模型/配置回归 | PASS（静态/单元）；旧GPU任务NOT RUN | 默认kwargs、图像、概率维度及注册保留检查PASS；根旧rlinf/examples/legacy工具相对启动SHA无diff。未额外重跑原OpenVLA训练 |
 
-125项通过对应 `2862a8c647f0ac112adcc9183ba8fcce29c862e1`。后续 `ff440880da2ad9b8c0a4f92d6e3a925842f6de17` 只改smoke FSDP包装配置及断言：空wrap targets、单根NO_SHARD/FP32/use_orig_params，wrappers/mixed_precision_rules为空。这消除了已观察的nested边界，是待真实验证的规避方案，尚不能确诊Torch内部根因。连续forward/backward、显存和checkpoint须由19354验证。
+125项通过对应 `2862a8c647f0ac112adcc9183ba8fcce29c862e1`。`ff440880` 将 GRPO 改用单根 FSDP，19354 越过此前嵌套包装的 view 写回失败点，但反向显存仍不足。`fedcdf2d` 在单根 FSDP 中排除冻结参数，GRPO 另启用 transformer 激活重算。两项重跑沿用原任务、数据、动作长度、奖励和噪声。
 
 19339第一个有效micro逐action误差.0008545，满足当时first-only阈值.001；后续最大.0014477。当前新增第一步optimizer前**每个micro**的chunk ratio ±1%数值门槛，有专门测试。通用actor/ratio=.2998176是20个micro含14个全mask零指标的平均，不能读成有效ratio≈.3；有效6个chunk的比率范围见D。
 
 控制频率在真实demo回放中测为20Hz；官方SFT窗口沿用其30Hz时间轴假设，分别记录，没有将官方插值改成20Hz。视频编码fps不等于控制频率。
 
-2026-11-08服务器SSH两次中断，第二次用户确认暂时无法恢复。本地代码与已有证据继续完成；19353/19354状态不能根据提交推测。每个smoke有1小时Slurm时限。恢复网络后先查询这些作业，不重复启动大规模实验。
+2026-11-09 SSH 恢复后读取 19353/19354 最终日志。账号 Slurm 限额要求顺序执行本轮作业，每个 smoke 有 1 小时上限。可用的 4090node2/3 当时均有作业分配全部四卡，`squeue --start` 暂估 19407/19408 于 2026-11-15 01:40 开始。此时间随调度变化。
 
 2026-11-08 本地重跑命令：
 

@@ -93,18 +93,19 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\xvla\remote.ps1 
 
 查询只读，不向作业发送中断。`logs` 查看 out/err 尾部；完整日志及视频留在运行证据目录。`XVLA_JOB_PASS` 仅在命令成功返回后打印。不能只看到模型加载或shape正确就把真实仿真/训练登记通过。
 
-网络恢复后，先读取本次尚未取回的19353/19354。频繁短连接或VPN不稳定时，可使用单一交互连接串行查询（不会自动激活其他项目环境）：
+频繁短连接或VPN不稳定时，可使用单一交互连接串行查询。该命令只导出当前项目的路径：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\xvla\remote.ps1 session
 ```
 
-进入该远端shell后，仅先查询，不重复提交：
+进入远端 shell 后，先查已提交的作业和排队原因：
 
 ```bash
-sacct -j 19353,19354 --format=JobID,State,ExitCode,Elapsed -P
-tail -c 6000 "$FYP_XVLA_DATA/logs/19353.out"
-tail -c 6000 "$FYP_XVLA_DATA/logs/19354.out"
+squeue --start -u "$USER" -o '%i|%j|%S|%R'
+sacct -X -j 19407,19408 --format=JobID,State,ExitCode,Elapsed -P
+tail -c 6000 "$FYP_XVLA_DATA/logs/19407.out"
+tail -c 6000 "$FYP_XVLA_DATA/logs/19408.out"
 ```
 
 完整SFT验收需`optimizer_update`中冻结组未变、`native_checkpoint_roundtrip`及新进程`XVLA_CHECKPOINT_CHECK PASS`；完整GRPO验收需有方差组、actor梯度/参数变化、同步、新rollout、原生及新进程恢复。失败则按该具体错误修复，不能因作业曾RUNNING而填写PASS。
@@ -121,9 +122,9 @@ tail -c 6000 "$FYP_XVLA_DATA/logs/19354.out"
 
 少量全胜/全败的 GRPO 组会产生零相对优势；必须报告组内方差和保留比例，不能伪造 advantage 或改奖励掩盖。smoke未提升成功率不等于接入失败；smoke成功也不代表方法有效。
 
-本次默认与σpos=.015探索组均全胜；`grpo_stress`是显式不同的压力探索策略：σpos=.04、σrot=.12、σgrip=.6，8个环境分2组、1次update、global batch80。只用于取得可验的真实相对优势，不是与默认PPO的公平性能比较。19348两组确有方差但FSDP失败；19354为相同条件的封装修复重跑，最终日志待取回。本轮不继续扩大资格搜索。
+默认和σpos=.015探索组均全胜。`grpo_stress` 使用σpos=.04、σrot=.12、σgrip=.6，8个环境分2组、1次update、global batch80，仅用于资格验证。19348和19354均采到有方差的组，分别因FSDP view写回和显存不足而失败。19408沿用19354的任务与采样协议。
 
-单卡smoke当前显式空wrap targets，仅保留根FSDP，use_orig_params=true、NO_SHARD/FP32，避免已观察的nested布局view写回失败。它不改变模型计算公式；其新布局真实闭环仍以19354为准。不能将此单卡配置自动外推为已验证多卡/full/LoRA训练。
+SFT 与 GRPO 压力配置通过 `actor.fsdp_config.disable:true` 关闭子模块自动包装，保留根 FSDP。 `xvla_ignore_frozen_parameters:true` 要求单 rank、NO_SHARD、FP32、use_orig_params 和关闭 FSDP CPU offload。它将冻结参数留在模型和 checkpoint 中，排除在 FSDP 扁平梯度缓冲外。GRPO 压力配置另外启用非重入激活重算。真实验证见作业19407/19408。
 
 SFT恢复在原生DCP/data.pt/rng.pt旁保存`xvla_sft_data_state.json`，绑定manifest、seed、rank/world、microbatch、epoch/offset。EpochCursorSampler保存真实epoch及索引cursor；125项测试中的真实TorchData测试覆盖later-epoch全部剩余batch顺序。跨进程完整worker恢复尚未实跑，不能用这项单元替代。
 
@@ -135,7 +136,7 @@ python tools/xvla/apply_runtime_patch.py --runtime third_party/rlinf --check
 python tools/xvla/apply_runtime_patch.py --runtime third_party/rlinf
 ```
 
-helper验证精确HEAD、patch哈希和每个受影响文件before/after哈希；已应用则幂等返回，遇到用户修改或部分应用时拒绝，不自动reset。7个上游文件改动均默认关闭。训练 mode开关必须同时位于 `actor.model.pass_predict_mode` 和独立评估的 `rollout.model.pass_predict_mode`，因为上游worker根据 only_eval选择model_cfg。
+helper验证精确HEAD、patch哈希和每个受影响文件before/after哈希；已应用则幂等返回，遇到用户修改或部分应用时拒绝，不自动reset。8个上游文件改动均默认关闭。训练 mode开关必须同时位于 `actor.model.pass_predict_mode` 和独立评估的 `rollout.model.pass_predict_mode`，因为上游worker根据 only_eval选择model_cfg。
 
 `job.sh` 设置 `RLINF_XVLA_ISOLATED_RAY=1`，只启动本作业 local Ray；object store有界2GiB，CPU来自Slurm，GPU来自未被修改的 `CUDA_VISIBLE_DEVICES`，`RAY_TMPDIR` 和 spill 路径均包含job ID。禁止全局 `ray stop`。本集群 RealMemory调度配置异常；不申请错误的64G/`--mem=0`独占，不声称内存已被可靠隔离。
 

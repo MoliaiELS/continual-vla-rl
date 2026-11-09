@@ -23,6 +23,8 @@ mu = y[:C, :10]
 
 没有把 clean prediction 改作 velocity，没有 Euler 速度积分。RL 实现保留 autograd，不调用带 `no_grad` 的官方 `generate_actions()`；rollout 与训练重算均关闭 dropout/DropPath，并采用相同权重存储、autocast 和输入预处理。
 
+`actor.model.xvla.checkpoint_transformer:true` 对 actor 重算的每次 transformer 调用使用非重入激活重算。反向时重新计算中间激活，保留完整 clean-action 递推的梯度路径、缓存的 `z` 和实际采样的 `q`。固定噪声单元测试逐项比较启用前后的 logprob 和梯度。
+
 接着对实际执行前缀的10维 raw output 加独立终端高斯噪声：
 
 `q[c,j] = mu[c,j] + sigma[j] * epsilon[c,j]`，`epsilon ~ Normal(0,I)`。
