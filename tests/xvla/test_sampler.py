@@ -125,6 +125,22 @@ class SamplerTests(unittest.TestCase):
         self.assertTrue(got.requires_grad)
         self.assertFalse(core.training)
 
+    def test_checkpointed_recompute_preserves_logprobs_and_gradients(self):
+        core, obs = ToyCore(), make_inputs(batch=1)
+        sampler = TerminalCleanGaussianSampler()
+        sample = sampler.sample(
+            core, obs, initial_noise=torch.ones(1, 3, 20),
+            terminal_noise=torch.ones(1, 3, 10), steps=4,
+        )
+        args = (core, obs, sample['initial_noise'], sample['raw_actions'])
+        eager = sampler.recompute(*args, steps=4)['logprobs']
+        recomputed = sampler.recompute(*args, steps=4, checkpoint_transformer=True)['logprobs']
+        torch.testing.assert_close(recomputed, eager, atol=0, rtol=0)
+        expected, = torch.autograd.grad(eager.sum(), core.transformer.theta)
+        actual, = torch.autograd.grad(recomputed.sum(), core.transformer.theta)
+        self.assertNotEqual(expected.item(), 0.0)
+        torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+
     def test_preserves_suffix_and_inactive_auxiliary_coupling(self):
         core, obs = ToyCore(), make_inputs(batch=1)
         z = torch.zeros(1, 3, 20)

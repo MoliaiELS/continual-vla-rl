@@ -51,6 +51,7 @@ actor:
   fsdp_config:
     strategy: fsdp
     sharding_strategy: no_shard
+    xvla_ignore_frozen_parameters: true
     wrap_policy:
       transformer_layer_cls_to_wrap: []
       module_classes_to_wrap: []

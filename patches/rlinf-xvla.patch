@@ -547,3 +547,42 @@
  
          if visible_devices is None or visible_devices == "":
              return []
+--- a/rlinf/hybrid_engines/fsdp/strategy/fsdp.py
++++ b/rlinf/hybrid_engines/fsdp/strategy/fsdp.py
+@@ -179,6 +179,28 @@
+ 
+         cpu_offload = CPUOffload(offload_params=self.cfg.fsdp_config.cpu_offload)
+ 
++        ignored_states = None
++        if self.cfg.fsdp_config.get("xvla_ignore_frozen_parameters", False):
++            if (
++                self.cfg.model.model_type != "xvla"
++                or self.cfg.fsdp_config.sharding_strategy != "no_shard"
++                or device_mesh.size() != 1
++                or self.cfg.model.precision != "fp32"
++                or mixed_precision.param_dtype != torch.float32
++                or cpu_offload.offload_params
++                or not self.cfg.fsdp_config.use_orig_params
++            ):
++                raise ValueError(
++                    "Ignoring frozen X-VLA parameters requires single-rank FP32 "
++                    "NO_SHARD with original parameters and no FSDP CPU offload"
++                )
++            # Frozen tensors remain registered in the model and checkpoint.
++            # Keep them out of the trainable flat parameter and its grad buffer.
++            ignored_states = tuple(
++                parameter for parameter in model.parameters()
++                if not parameter.requires_grad
++            )
++
+         fsdp_model = FSDP(
+             module=model,
+             param_init_fn=init_fn,
+@@ -193,6 +215,7 @@
+             limit_all_gathers=self.cfg.fsdp_config.limit_all_gathers,
+             use_orig_params=self.cfg.fsdp_config.use_orig_params,
+             cpu_offload=cpu_offload,
++            ignored_states=ignored_states,
+         )
+         apply_buffer_dtype_compatibility(fsdp_model)
+         return fsdp_model

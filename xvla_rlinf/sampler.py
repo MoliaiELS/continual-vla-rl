@@ -56,6 +56,7 @@ def clean_action_prediction(
     initial_noise: Tensor,
     *,
     steps: int = 10,
+    checkpoint_transformer: bool = False,
 ) -> tuple[Tensor, dict[str, Tensor]]:
     """Run the fixed-source native clean-action recurrence with autograd.
 
@@ -79,6 +80,13 @@ def clean_action_prediction(
         model_inputs["image_mask"],
     )
     proprio = model_inputs["proprio"]
+    predictor = core.transformer
+    if checkpoint_transformer and torch.is_grad_enabled():
+        from functools import partial
+
+        from torch.utils.checkpoint import checkpoint
+
+        predictor = partial(checkpoint, predictor, use_reentrant=False)
     action = torch.zeros_like(initial_noise)
     for i in range(steps, 0, -1):
         t = torch.full(
@@ -89,7 +97,7 @@ def clean_action_prediction(
         )
         x_t = initial_noise * t[:, None, None] + action * (1 - t[:, None, None])
         proprio_m, x_t_m = core.action_space.preprocess(proprio, x_t)
-        action = core.transformer(
+        action = predictor(
             domain_id=model_inputs["domain_id"],
             action_with_noise=x_t_m,
             proprio=proprio_m,
@@ -238,12 +246,16 @@ class TerminalCleanGaussianSampler(nn.Module):
         raw_actions: Tensor,
         *,
         steps: int = 10,
+        checkpoint_transformer: bool = False,
     ) -> dict[str, Any]:
         if raw_actions.ndim != 3 or raw_actions.shape[-1] != ACTIVE_ACTION_DIM:
             raise ValueError("Stored raw actions must have shape [B,C,10]")
         if raw_actions.requires_grad:
             raise ValueError("Stored sampled actions must be detached from their sampling graph")
-        raw20, enc = clean_action_prediction(core, model_inputs, initial_noise, steps=steps)
+        raw20, enc = clean_action_prediction(
+            core, model_inputs, initial_noise, steps=steps,
+            checkpoint_transformer=checkpoint_transformer,
+        )
         if raw_actions.shape[0] != raw20.shape[0] or not 1 <= raw_actions.shape[1] <= raw20.shape[1]:
             raise ValueError("Stored action prefix does not match batch or native horizon")
         mean = raw20[:, :raw_actions.shape[1], :ACTIVE_ACTION_DIM].float()

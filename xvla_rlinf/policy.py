@@ -170,7 +170,8 @@ class XVLAPolicy(nn.Module, BasePolicy):
             raise NotImplementedError('On-policy recompute requires log probabilities')
         inputs=self._device_inputs(forward_inputs)
         stats=self.sampler.recompute(self.core,inputs,forward_inputs['initial_noise'],
-                                     forward_inputs['raw_actions'],steps=self.steps)
+                                     forward_inputs['raw_actions'],steps=self.steps,
+                                     checkpoint_transformer=self.xcfg.get('checkpoint_transformer',False))
         logprobs=stats['logprobs'].float()
         mask=forward_inputs.get('executed_mask')
         if mask is not None:

@@ -124,7 +124,7 @@ class RuntimePatchSource(unittest.TestCase):
         cls.temp.cleanup()
 
     def test_pinned_patch_applies_to_exact_sources(self):
-        self.assertEqual(len(self.sources), 7)
+        self.assertEqual(len(self.sources), 8)
 
     def test_isolated_ray_is_opt_in_bounded_and_preserves_cuda_mask(self):
         ns = load_functions(self.sources["rlinf/scheduler/cluster/cluster.py"], {"_xvla_isolated_ray_kwargs"}, {"os": os, "Path": Path})

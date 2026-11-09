@@ -27,9 +27,12 @@ env:
     group_size: 4
 actor:
   global_batch_size: 80
+  fsdp_config:
+    xvla_ignore_frozen_parameters: true
   model:
     add_value_head: false
     xvla:
+      checkpoint_transformer: true
       position_std: 0.04
       rotation_std: 0.12
       gripper_logit_std: 0.6

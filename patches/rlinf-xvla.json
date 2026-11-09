@@ -36,7 +36,12 @@
       "path": "rlinf/scheduler/hardware/accelerators/nvidia_gpu.py",
       "before_sha256": "05571642b2f5c697f51946b1b9de404f924d530b855b50de937eca89c39e4625",
       "after_sha256": "8707ecbd3fe7c2fbde7f095e975668cc335f8c44ece817494e5fbea266ad8953"
+    },
+    {
+      "path": "rlinf/hybrid_engines/fsdp/strategy/fsdp.py",
+      "before_sha256": "3849e4761fecb8c35a37c70e917ce9a668fc96a8d1f1df81e7c39dfa650948f9",
+      "after_sha256": "57e6c58e2f3e764d4187c8639f7915393fa8bacbfbdbbda55bcca042675b6c42"
     }
   ],
-  "patch_sha256": "46af928db0610b2d2d6ba5c7ffc7a17819e9394308fe4dc8cdbcae3a3b8bd65f"
+  "patch_sha256": "21b75867930f67826d70873abee81a51b873fb005ce09e0bc0b7b2a55b1131b8"
 }
