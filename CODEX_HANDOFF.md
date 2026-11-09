@@ -20,9 +20,9 @@
 - 19344独立官方processor/raw20/sigmoid/env7对照误差均0，FP32/H30/steps10。19336原生真实2/2成功，150策略步+20settling；19338同history加噪2/2成功，151+20。仅同一任务/初态的连通性证据。
 - 19337成功转换demo_48（1独立demo、96动作帧、86官方窗口）。环境20Hz与官方SFT插值30Hz分别记录，不混用。
 - 19339真实PPO1次更新及post-update rollout成功；actor128020参数、value267777参数，全部5个actor参数组非零梯度和实际变化；初始有效ratio0.995446–1.001728；更新后全state hash/固定noise probe相同；原生DCP扰动后恢复PASS。完整Slurm331秒=.091944GPUh，actor峰值14.562GiB、5秒采样己方compute总21492MiB（不含全部EGL）。本地`.local/xvla-evidence/ppo19339_summary.json`和三个视频已保留。
-- 最近一次全量通过的真实依赖测试是19352，提交2862a8c6，**125/125 PASS，无SKIP**。19405新增的固定噪声激活重算 logprob/梯度等价测试通过。该次 GPU 映射测试因旧的 patch 文件数断言未运行，修复后本机通过10项。账号提交配额有两个活跃作业，最终版本的全量Slurm重跑待空位。
+- 修复版 `b2fa4b9b` 的 Slurm CPU 回归作业 19438 通过 **126/126**，无跳过。旧结果 19352 在 `2862a8c6` 上通过125项，19405的旧patch文件数断言失败已修复。
 - 19343/19345全胜组方差0，按设计拒绝伪造更新。19348压力策略σpos=.04/rot=.12/grip=.6得到两组[0,0,1,1]、[0,1,1,1]，但第二次FSDP前向view写回失败，不能称GRPO有效更新；采用单根FSDP配置重跑。
 - 19353（SFT）和19354（GRPO stress）均以1:0退出。SFT的完整state导出缺冻结视觉投影，GRPO真实回报组 [0,1,0,0] 和 [1,1,1,1] 中一组有方差，随后actor backward OOM。单根 FSDP 排除冻结参数和 GRPO 的非重入激活重算为本轮修复。
-- **19407（SFT）和19408（GRPO stress）已提交，先读这两个作业的 `sacct`、out/err 及 `checkpoint_check.json`。** 4090node2/3当时均分配全部四卡，Slurm暂估2026-11-15 01:40开始，时间可能变化。每个作业1卡、时限1小时。19406在启动前取消，已由19407取代。
-- 未完成真实验收：C完整SFT/冻结/重载、E独立进程模型恢复及完整新worker恢复、F GRPO完整更新、G新布局完整显存。完整新worker/多GPU/full/LoRA真实训练和研究实验NOT RUN。不得把已充分LIBERO SFT权重称few-shot或把RL已见条件称zero-shot OOD。
+- 19407（SFT）和19408（GRPO stress）在单张4090上依次完成，退出0:0。19407完成Pt的1条示教、1步SFT，5个训练张量变化、冻结组不变。19408有一组混合回报并完成1步actor更新、同步和新rollout。两项均通过同worker原生恢复与新进程严格权重加载。
+- 下一阶段可做LIBERO-Spatial的Pt/SFT配对评估。19407产物可验证评估加载，数据效率对照需另定独立示教和训练步数。完整新worker恢复、Pt→SFT→RL串联、多GPU/full/LoRA真实训练和研究规模评估仍为NOT RUN。
 - 恢复连接优先使用`tools/xvla/remote.ps1 session`的单连接串行诊断；从settings派生FYP变量。所有新训练依旧提交Git固定worktree并经sbatch，最多2卡（含pending预约的保守预算），不连接他人的Ray。

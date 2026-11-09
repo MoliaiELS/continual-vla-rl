@@ -1,6 +1,6 @@
 # X-VLA 接入审计与验收
 
-更新于 2026-11-09。固定权重原生计算对齐、真实 LIBERO rollout 和一次真实 PPO 更新已通过。各项 `PASS` 只覆盖表中列出的验收范围。
+更新于 2026-11-09。固定权重原生计算对齐、真实 LIBERO rollout、SFT、PPO 和 GRPO 压力配置均通过各自的单卡小测。各项 `PASS` 只覆盖表中列出的验收范围。
 
 ## 固定身份与工作边界
 
@@ -97,8 +97,9 @@ RL sampler 为本项目明确命名的 `terminal_clean_gaussian_v1`，在完整�
 | 19354 | FAIL | 150秒，真实组回报 [0,1,0,0] 和 [1,1,1,1]，方差 .1875 和 0，有信息组比例 50%。单根 FSDP 在 actor backward 触发 CUDA OOM，未完成 optimizer |
 | 19405 | FAIL，已修复测试 | GPU 映射测试把 patch manifest 文件数写死为 7，新增 FSDP 补丁后 setUpClass 失败。新增的激活重算 logprob 和梯度等价测试通过 |
 | 19406 | NOT RUN | 排队时发现固定版本 wrap policy 对空列表仍可返回包装函数，已取消尚未启动的 SFT，改由 19407 运行显式禁用子模块自动包装的配置 |
-| 19407 | BLOCKED（Slurm 排队） | X-VLA-Pt SFT 小测，1 张 4090，固定提交 `fedcdf2d` |
-| 19408 | BLOCKED（Slurm 排队） | X-VLA-Libero GRPO 压力小测，1 张 4090，固定提交 `fedcdf2d` |
+| 19407 | PASS | X-VLA-Pt，1条独立demo、86个可用窗口、batch1、1次SFT更新。5个可训练张量均有有限非零梯度和权重变化，冻结状态逐项哈希不变。原生同worker恢复和独立进程严格全状态恢复通过 |
+| 19408 | PASS | X-VLA-Libero GRPO 压力配置，真实组回报 [1,0,1,1] 和 [1,1,1,1]，方差 .1875 和 0，保留率50%。5个actor张量均有非零梯度和实际变化。同步后原生评估2/2成功，同worker原生恢复、独立进程严格加载及固定噪声探针通过 |
+| 19438 | PASS | `b2fa4b9b` 的Slurm CPU回归，126项全通过、无跳过，包含激活重算等价性和GPU分配映射 |
 
 原生/PPO视频已复制到本机 `.local/xvla-evidence/`；原生视频 `native-19336.mp4`。PPO的机器可读摘要为 `.local/xvla-evidence/ppo19339_summary.json`，保留逐行日志及TensorBoard来源。
 
@@ -106,14 +107,14 @@ RL sampler 为本项目明确命名的 `terminal_clean_gaussian_v1`，在完整�
 
 | 条目 | 当前状态 | 已有证据 / 尚需证据 |
 | --- | --- | --- |
-| A 注册、预处理、旋转/夹爪、batch/mask/history/reset | PASS（已测范围） | 19352真实Torch全125项PASS，19336真实控制器/回合验证。自动reset、重建分支主要为替身测试。19405运行了116项，另有GPU映射测试类初始化失败。该类10项在 `b2fa4b9b` 修复后本机通过，最终提交的完整Slurm套件待重跑 |
+| A 注册、预处理、旋转/夹爪、batch/mask/history/reset | PASS（已测范围） | 19438真实依赖126项全通过，19336验证真实控制器和回合。自动reset、重建分支主要为替身测试 |
 | B 固定噪声原生一致性、真实短 rollout | PASS | 19344独立原生processor/raw/7D全部误差0；19336真实2回合成功与视频 |
-| C 真实小 batch SFT、冻结组、保存重载 | FAIL（19353），修复验收 BLOCKED | 1条成功demo、86个官方窗口。19353在全状态导出时失败，19407排队等待GPU |
-| D 更新前 old/recompute、ratio≈1、解析概率梯度 | PASS（近似数值一致） | 19339有效chunk ratio 0.995446–1.001728；最大chunk logdiff .0045643。解析Gaussian/score梯度独立例子PASS；float32批大小2与micro1产生小差异，未声称逐bit一致 |
-| E 更新后 actor→rollout、checkpoint | PPO同worker PASS；独立进程 NOT RUN | 19339完整state hash及同噪声probe匹配，保存后故意扰动参数再经原生DCP恢复。19353/19354未进入新进程checker |
-| F 真实在线 reward→advantage→actor梯度→step→sync→新rollout | PPO PASS，GRPO FAIL（19354），修复验收 BLOCKED | 19339五个action/prompt组有非零actor梯度与实际变化。19354有真实相对优势，actor backward OOM，19408排队等待GPU |
-| G 全循环资源与计数 | PPO已测，SFT/GRPO完整循环待验 | 19339 Slurm331秒、0.091944 GPUh，actor allocator峰值14.562GiB，5秒采样本作业compute进程合计21492MiB。19353/19354分别分配88/150秒，获配设备5秒采样峰值8666/18079MiB，GRPO的采样值未覆盖OOM瞬时峰值 |
-| H 相关旧模型/配置回归 | PASS（静态/单元）；旧GPU任务NOT RUN | 默认kwargs、图像、概率维度及注册保留检查PASS；根旧rlinf/examples/legacy工具相对启动SHA无diff。未额外重跑原OpenVLA训练 |
+| C 真实小 batch SFT、冻结组、保存重载 | PASS（19407，单卡prompt/action） | 5个可训练张量有实际变化，冻结组和缓冲区不变。原生同worker恢复与独立进程全状态digest匹配 |
+| D 更新前 old/recompute、ratio≈1、解析概率梯度 | PASS（近似数值一致） | PPO 19339有效chunk ratio 0.995446–1.001728，最大chunk logdiff .0045643。GRPO 19408全部80个micro的ratio 0.998784–1.000944。解析Gaussian/score梯度独立例子PASS |
+| E 更新后 actor→rollout、checkpoint | PASS（已测范围） | PPO 19339、GRPO 19408完整同步哈希及同噪声探针匹配，主动扰动后同worker原生DCP恢复。19407/19408独立进程严格全状态加载通过，GRPO固定噪声探针误差为0。完整新worker恢复 NOT RUN |
+| F 真实在线 reward→advantage→actor梯度→step→sync→新rollout | PPO PASS，GRPO压力配置 PASS | 19339和19408均有五个action/prompt张量的非零actor梯度与实际变化，并执行了同步后的新rollout |
+| G 全循环资源与计数 | PASS（已测作业与采样口径） | PPO 19339 Slurm331秒、0.091944 GPUh，actor allocator峰值14.562GiB。SFT 19407 Slurm300秒，获配设备5秒采样峰值4312MiB。GRPO 19408 Slurm391秒，获配设备5秒采样峰值14900MiB，actor allocator峰值约3.55GiB。详见下文 |
+| H 相关旧模型/配置回归 | PASS（静态/单元）；旧GPU任务NOT RUN | 19438覆盖默认kwargs、图像、概率维度及注册保留检查。根旧rlinf/examples/legacy工具相对启动SHA无diff |
 
 125项通过对应 `2862a8c647f0ac112adcc9183ba8fcce29c862e1`。`ff440880` 将 GRPO 改用单根 FSDP，19354 越过此前嵌套包装的 view 写回失败点，但反向显存仍不足。`fedcdf2d` 在单根 FSDP 中排除冻结参数，GRPO 另启用 transformer 激活重算。两项重跑沿用原任务、数据、动作长度、奖励和噪声。
 
@@ -121,7 +122,7 @@ RL sampler 为本项目明确命名的 `terminal_clean_gaussian_v1`，在完整�
 
 控制频率在真实demo回放中测为20Hz；官方SFT窗口沿用其30Hz时间轴假设，分别记录，没有将官方插值改成20Hz。视频编码fps不等于控制频率。
 
-2026-11-09 SSH 恢复后读取 19353/19354 最终日志。账号 Slurm 限额要求顺序执行本轮作业，每个 smoke 有 1 小时上限。可用的 4090node2/3 当时均有作业分配全部四卡，`squeue --start` 暂估 19407/19408 于 2026-11-15 01:40 开始。此时间随调度变化。
+19407 和 19408 使用 `fedcdf2d980db9e4a880ed375c468f4e6550a107`，已于 2026-11-09 在 `4090node2` 依次完成。按 Slurm 整作业计时分别为 0.08333 和 0.10861 GPUh。GRPO 的训练采样为8回合、865策略步、80 settling步，更新后评估为2回合、151策略步、20 settling步。actor更新耗时34.71秒，更新前/后同步及探针分别耗时16.55和12.32秒。指标取自 `logs/19408.out`、`runs/19408/audit-*.jsonl` 和 `runs/19408/resources.json`。SFT 审计见 `runs/19407/sft_worker_rank0.jsonl`，两个独立恢复结果均位于各自 `checkpoints/global_step_1/actor/checkpoint_check.json`。
 
 2026-11-08 本地重跑命令：
 

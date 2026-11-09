@@ -144,4 +144,6 @@ helper验证精确HEAD、patch哈希和每个受影响文件before/after哈希�
 
 训练使用 measured proprio，原生评估使用官方 autoregressive history。绝对控制、图像、Rotate6D、夹爪转换和完整chunk不可悄悄替换；所有配置变更先记录协议差异。当前训练300步、评估800步、settling10步；transport810只是容纳最后不完整chunk，不代表执行810步。固定上游GAE将termination/truncation都作为结束，不在当前有限时域后bootstrap，chunk reward求和与gamma时间尺度见审计。
 
-只有A–H真实证据齐备后，才为更长预算、多任务、更多seed、SFT/PPO/GRPO与参数范围比较另行冻结协议。两个研究起点分别保留Pt有限示教SFT和已LIBERO-SFT的Libero泛化路径，明确RL留出、SFT未见和扰动OOD的差异。本次不开展完整规模实验、不声称SAC/IQL已支持、不用充分SFT权重冒充few-shot。
+全10任务的配对评估需要固定 `(task_id, trial_id, seed)` 清单与每回合的策略噪声种子，并输出每回合成功标记与实际控制步。现有 `native_eval_smoke` 使用固定 `reset_id=42`。在 `auto_reset=false` 时，增加 `rollout_epoch` 会重新从同一初态序列开头取样。保留原生800步评估协议，按任务分别汇报成功次数和回合数。
+
+`X-VLA-Pt` 和从相同 Pt 起点得到的有限示教 SFT 权重组成配对对照，`X-VLA-Libero` 单列为官方已适配参考。评估 SFT 导出时，使用相同 Pt 构造配置、`prompt_heads`、domain row 3、关闭 value head，走固定 RLinf 的 `runner.ckpt_path` 严格加载 `actor/model_state_dict/full_weights.pt`。19407 的单步产物已通过独立权重加载，可验证新评估入口。其余多任务数据转换、冻结评估配置和成功率对照仍待执行。
