@@ -59,6 +59,9 @@ class HydraCompositionTests(unittest.TestCase):
                 self.assertEqual(cfg.actor.model.precision, "fp32")
                 self.assertNotIn('openpi',cfg.actor.model)
                 self.assertEqual(list(cfg.actor.fsdp_config.wrap_policy.transformer_layer_cls_to_wrap),[])
+                if cfg.actor.fsdp_config.get('xvla_ignore_frozen_parameters', False):
+                    self.assertTrue(cfg.actor.fsdp_config.disable)
+                    self.assertEqual(cfg.actor.fsdp_config.sharding_strategy, 'no_shard')
 
     def test_ppo_and_grpo_have_distinct_correct_loss_and_group_contracts(self):
         ppo = compose_config("ppo_smoke")

@@ -28,6 +28,7 @@ env:
 actor:
   global_batch_size: 80
   fsdp_config:
+    disable: true # disable automatic child wrapping, keep the FSDP root
     xvla_ignore_frozen_parameters: true
   model:
     add_value_head: false
