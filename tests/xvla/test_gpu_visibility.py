@@ -1,6 +1,6 @@
 """Slurm visibility regression logic; no CUDA, EGL or Ray process is launched.
 
-The tested source is reconstructed by applying the seven-file audited patch
+The tested source is reconstructed by applying the audited patch
 to exact pinned Git sources. Driver/CUDA/EGL inventories are controlled inputs;
 a real allocated-node check is still required after these tests pass.
 """
@@ -32,7 +32,7 @@ class GPUVisibilityTests(unittest.TestCase):
         cls.root = Path(cls.temp.name)
         subprocess.run(["git", "-C", str(cls.root), "init", "-q"], check=True, capture_output=True)
         manifest = json.loads((ROOT / "patches/rlinf-xvla.json").read_text())
-        assert len(manifest["files"]) == 7
+        assert NVIDIA_PATH in {item["path"] for item in manifest["files"]}
         for item in manifest["files"]:
             data = subprocess.run(["git", "-C", str(ROOT / "third_party/rlinf"), "show",
                                    manifest["upstream_commit"] + ":" + item["path"]],
