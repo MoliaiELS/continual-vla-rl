@@ -153,7 +153,10 @@ python -m unittest discover -s tests/xvla -p test_registration.py -v
 | --- | --- | ---: | ---: | ---: | ---: |
 | 官方 X-VLA-Libero | 19443 | 46/50（92%） | 7,860 | 8分16秒 | 4558MiB |
 | X-VLA-Pt | 19444 | 0/50（0%） | 40,000 | 30分40秒 | 4558MiB |
+| X-VLA-Pt 单步 SFT | 19469 | 0/50（0%） | 40,000 | 33分49秒 | 4558MiB |
 
 两项作业均退出0:0，各完成50回合和500个settling步。官方权重的任务4（木柜顶层抽屉）3/5，任务5（小烤碗上）和任务8（盘子旁）各4/5，其余7项各5/5。Pt每项0/5，全部回合达到800步上限。此结果覆盖预先固定的50个初态。
 
-证据在 `runs/19443/` 和 `runs/19444/` 的 `benchmark_episodes.jsonl`、`benchmark_summary.json` 和 `resources.json`。单步SFT产物的配对评估已提交为19469，初始化来自Pt，训练只用了任务0的一条独立示教和一次优化器更新。
+单步SFT评估19469也退出0:0，加载了通过严格恢复校验的19407产物。训练使用任务0的一条独立示教和一次优化器更新。该任务0/5，其余任务也各0/5。全部50回合达到800步上限，与未微调Pt的任务、初态哈希、种子和二元结果逐项匹配。
+
+证据在 `runs/19443/`、`runs/19444/` 和 `runs/19469/` 的 `benchmark_episodes.jsonl`、`benchmark_summary.json` 和 `resources.json`。
