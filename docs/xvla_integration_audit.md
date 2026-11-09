@@ -144,3 +144,16 @@ python -m unittest discover -s tests/xvla -p test_registration.py -v
 两个初始化路径目前以分离的Pt-SFT和Libero-RL配置保留，尚未完成Pt→本次SFT产物→RL串联验收。尤其SFT无value head，而PPO新增value head，直接把SFT full_weights.pt用于严格整policy加载会有缺失键；跨full/LoRA/domain-row表示还需明确的core导出/初始化转换，不能跳过strict检查称为同一起点。这些列为后续未完成项，不把现有独立smoke当作数据效率实验入口已全通。
 
 可跟进的研究观察：同一强SFT基座、简单初态和较小噪声下GRPO组可能全部成功，实际有效RL数据为零；4cm压力噪声才在本次产生混合组。后续应记录组内方差、保留率及探索导致的性能变化，统一协议再比较PPO/GRPO。这不构成技能遗忘、few-shot优势或OOD结论。
+
+## LIBERO-Spatial 配对基线
+
+固定代码 `6a0e7fcbd44ff79bb9487cf2a0aacf3456d21fd1`。每份权重运行任务0–9、各自初态0–4，共50回合。两组逐项匹配任务ID、初态ID、初态SHA256、环境种子和策略噪声种子。使用单张RTX 3090、FP32、原生采样、domain3、30步动作块、10次预测迭代、10步settling和800个实际策略步上限。
+
+| 权重 | 作业 | 成功 | 策略步 | Slurm用时 | 获配设备5秒采样峰值 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 官方 X-VLA-Libero | 19443 | 46/50（92%） | 7,860 | 8分16秒 | 4558MiB |
+| X-VLA-Pt | 19444 | 0/50（0%） | 40,000 | 30分40秒 | 4558MiB |
+
+两项作业均退出0:0，各完成50回合和500个settling步。官方权重的任务4（木柜顶层抽屉）3/5，任务5（小烤碗上）和任务8（盘子旁）各4/5，其余7项各5/5。Pt每项0/5，全部回合达到800步上限。此结果覆盖预先固定的50个初态。
+
+证据在 `runs/19443/` 和 `runs/19444/` 的 `benchmark_episodes.jsonl`、`benchmark_summary.json` 和 `resources.json`。单步SFT产物的配对评估已提交为19469，初始化来自Pt，训练只用了任务0的一条独立示教和一次优化器更新。
