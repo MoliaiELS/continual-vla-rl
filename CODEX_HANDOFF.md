@@ -26,3 +26,8 @@
 - 19407（SFT）和19408（GRPO stress）在单张4090上依次完成，退出0:0。19407完成Pt的1条示教、1步SFT，5个训练张量变化、冻结组不变。19408有一组混合回报并完成1步actor更新、同步和新rollout。两项均通过同worker原生恢复与新进程严格权重加载。
 - 下一阶段可做LIBERO-Spatial的Pt/SFT配对评估。19407产物可验证评估加载，数据效率对照需另定独立示教和训练步数。完整新worker恢复、Pt→SFT→RL串联、多GPU/full/LoRA真实训练和研究规模评估仍为NOT RUN。
 - 恢复连接优先使用`tools/xvla/remote.ps1 session`的单连接串行诊断；从settings派生FYP变量。所有新训练依旧提交Git固定worktree并经sbatch，最多2卡（含pending预约的保守预算），不连接他人的Ray。
+
+## 2026-11-09 LIBERO-Spatial benchmark
+
+- 固定提交 `6a0e7fcbd44ff79bb9487cf2a0aacf3456d21fd1` 新增单卡配对评估入口。3090 验证作业 19441 通过，任务0初态0成功，73个策略步、10个settling步、0个终止后步。Slurm耗时384秒，获配设备5秒采样峰值4556MiB。
+- 官方 Libero 基线 19443、Pt 基线 19444 均已提交，每份50回合，任务0–9、初态0–4，共用环境种子与每回合的初始噪声序列。分别读取 `runs/19443/`、`runs/19444/` 下的 `benchmark_episodes.jsonl`、`benchmark_summary.json` 和 `resources.json`。完整基线汇总及SFT对照待执行结果。
