@@ -55,6 +55,14 @@ case "$mode" in
  alignment) python -m xvla_rlinf.smoke alignment ;;
  native_eval) python -m xvla_rlinf.entry --config-name native_eval_smoke ;;
  stochastic_eval) python -m xvla_rlinf.entry --config-name stochastic_eval_smoke ;;
+ benchmark_libero|benchmark_pt|benchmark_sft_smoke)
+   benchmark_model="${mode#benchmark_}"
+   benchmark_args=(--start-task "${4:?start task}" --task-count "${5:?task count}" --trials "${6:?trials}")
+   if [[ "$mode" == benchmark_sft_smoke ]]; then
+     benchmark_model=sft-smoke
+     benchmark_args+=(--checkpoint "${7:?SFT actor checkpoint directory}")
+   fi
+   python -m xvla_rlinf.benchmark --model "$benchmark_model" "${benchmark_args[@]}" ;;
  convert)
    source_hdf5="${4:?source HDF5}"; converted_dir="${5:?converted output}"
    data_revision="${6:?data revision}"; source_hash="${7:?source SHA256}"

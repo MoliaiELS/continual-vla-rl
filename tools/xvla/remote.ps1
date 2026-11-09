@@ -2,7 +2,12 @@ param(
     [Parameter(Position=0)][ValidateSet('audit','sync','bootstrap','download','submit','status','logs','session')][string]$Command='audit',
     [Parameter(Position=1)][string]$Value='unit',
     [ValidateSet('libero','pt')][string]$Model='libero',
-    [int]$Gpus=1
+    [int]$Gpus=1,
+    [ValidateSet('3090','4090')][string]$GpuModel='4090',
+    [ValidateRange(0,9)][int]$StartTask=0,
+    [ValidateRange(1,10)][int]$TaskCount=10,
+    [ValidateRange(1,50)][int]$Trials=5,
+    [ValidatePattern('^[0-9]+$')][string]$CheckpointJobId
 )
 $ErrorActionPreference='Stop'
 $OutputEncoding=[Text.UTF8Encoding]::new($false)
@@ -76,11 +81,18 @@ echo XVLA_DOWNLOAD_PID=`$!
 "@
  }
  'submit' {
-  if ($Value -notmatch '^[a-z0-9_-]+$' -or $Gpus -notin @(0,1,2)) { throw 'Invalid smoke mode or GPU count' }
+  if ($Value -notmatch '^[a-z0-9_-]+$' -or $Gpus -notin @(0,1,2)) { throw 'Invalid X-VLA mode or GPU count' }
+  $benchmarkOptions=''
+  if ($Value -in @('benchmark_libero','benchmark_pt','benchmark_sft_smoke')) {
+   $benchmarkOptions=" --gpu-model $GpuModel --start-task $StartTask --task-count $TaskCount --trials $Trials"
+   if ($CheckpointJobId) { $benchmarkOptions += " --checkpoint-job-id $CheckpointJobId" }
+  } elseif ($PSBoundParameters.ContainsKey('GpuModel') -or $CheckpointJobId -or $StartTask -ne 0 -or $TaskCount -ne 10 -or $Trials -ne 5) {
+   throw 'GPU model and benchmark options require a benchmark mode'
+  }
   Invoke-XRemote @"
 test -f '$snapshot/tools/xvla/job.sh'
 mkdir -p '$data/logs'
-'$($settings.CondaRoot)/envs/vla_budget_rl/bin/python' '$snapshot/tools/xvla/submit.py' --repo '$snapshot' --data '$data' --mode '$Value' --gpus $Gpus --partition '$($settings.Partition)'
+'$($settings.CondaRoot)/envs/vla_budget_rl/bin/python' '$snapshot/tools/xvla/submit.py' --repo '$snapshot' --data '$data' --mode '$Value' --gpus $Gpus --partition '$($settings.Partition)'$benchmarkOptions
 "@
  }
  'status' {

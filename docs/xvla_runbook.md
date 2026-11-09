@@ -1,6 +1,6 @@
 # X-VLA 小规模接入操作手册
 
-本手册对应固定 RLinf `1bf78980d9339cbc67497eddceb9a1e3a74e2acc` 和固定 X-VLA 源码 `6c4ecfb8be458ae7c0c96094e4b0add4174f4fe2`。实际完成度以 [接入审计](xvla_integration_audit.md) 的逐项状态和日志为准。本次只运行接入 smoke；不要把原 OpenVLA 的 `tools/remote.ps1 experiment-submit` 用于 X-VLA。
+本手册对应固定 RLinf `1bf78980d9339cbc67497eddceb9a1e3a74e2acc` 和固定 X-VLA 源码 `6c4ecfb8be458ae7c0c96094e4b0add4174f4fe2`。实际完成度以 [接入审计](xvla_integration_audit.md) 的逐项状态和日志为准。X-VLA 使用本手册的专用入口。
 
 ## 工作流与路径
 
@@ -146,4 +146,16 @@ helper验证精确HEAD、patch哈希和每个受影响文件before/after哈希�
 
 全10任务的配对评估需要固定 `(task_id, trial_id, seed)` 清单与每回合的策略噪声种子，并输出每回合成功标记与实际控制步。现有 `native_eval_smoke` 使用固定 `reset_id=42`。在 `auto_reset=false` 时，增加 `rollout_epoch` 会重新从同一初态序列开头取样。保留原生800步评估协议，按任务分别汇报成功次数和回合数。
 
-`X-VLA-Pt` 和从相同 Pt 起点得到的有限示教 SFT 权重组成配对对照，`X-VLA-Libero` 单列为官方已适配参考。评估 SFT 导出时，使用相同 Pt 构造配置、`prompt_heads`、domain row 3、关闭 value head，走固定 RLinf 的 `runner.ckpt_path` 严格加载 `actor/model_state_dict/full_weights.pt`。19407 的单步产物已通过独立权重加载，可验证新评估入口。其余多任务数据转换、冻结评估配置和成功率对照仍待执行。
+`X-VLA-Pt` 和从相同 Pt 起点得到的有限示教 SFT 权重组成配对对照，`X-VLA-Libero` 单列为官方已适配参考。评估 SFT 导出时，使用与保存时一致的 Pt 构造配置，严格加载 `actor/model_state_dict/full_weights.pt` 并核验全状态摘要。19407 的单步产物用于验证新评估入口。
+
+### LIBERO-Spatial 配对评估
+
+先提交小份验证，再分别提交官方 Libero 和 Pt。默认面板覆盖 10 项任务，每项固定初态 0–4，共 50 回合。所有权重共享初态、环境种子和策略噪声序列，使用原生采样、绝对控制、10 步 settling 和 800 步控制上限。每个作业只申请 1 张 GPU，最多运行 1 小时。
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\xvla\remote.ps1 submit benchmark_libero -GpuModel 3090 -TaskCount 1 -Trials 1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\xvla\remote.ps1 submit benchmark_libero -GpuModel 3090
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\xvla\remote.ps1 submit benchmark_pt -GpuModel 3090
+```
+
+每个作业在 `runs/<job>/benchmark_episodes.jsonl` 逐回合写入身份、成功标记及实际步数。 `benchmark_summary.json` 在全部预定回合完成后写入，包含各任务成功次数、回合数和任务等权平均。可通过 `-StartTask`、`-TaskCount` 拆分任务，保持各权重的 `-Trials` 相同。用 `benchmark_sft_smoke -CheckpointJobId 19407` 验证单步 SFT 导出的评估路径。
