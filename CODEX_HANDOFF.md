@@ -2,7 +2,7 @@
 
 新对话先读 [X-VLA 部署与实验进度](docs/experiment-progress-20261104.md#x-vla-部署与实验进度)，其中汇总了目标、实测结果和当前接手点。
 
-Pt 源任务训练的当前方案及新增作业证据见 [X-VLA-Pt 源任务实验](docs/xvla_pt_source_experiment.md)。毕设现行方向是单源任务的初态覆盖与组合迁移，原多任务回放方案已归档。
+Pt 源任务训练的当前方案及新增作业证据见 [X-VLA-Pt 源任务实验](docs/xvla_pt_source_experiment.md)。毕设现行方向是单源任务的初态覆盖与组合迁移，原多任务回放方案已归档。19525 的十示教两阶段 SFT checkpoint 已在任务 0 开发面板取得 9/10（19528）。下一阶段用该权重验收在线奖励与有效 actor 更新。
 
 2026-11-08 开始实际接入。此前仓库没有 CODEX_HANDOFF.md，本文件新增以保存实施状态。
 
