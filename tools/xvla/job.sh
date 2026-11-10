@@ -54,6 +54,9 @@ case "$mode" in
  imports) python -m xvla_rlinf.smoke imports ;;
  source_reset_audit)
    python -m xvla_rlinf.source_reset_audit --start-trial 30 --trials 10 --along-offset-m 0.01 ;;
+ e1_source_audit)
+   python -m xvla_rlinf.e1_source_audit --split "$repo/configs/xvla/protocol_20261110/split.json" \
+     --manifest "$FYP_XVLA_DATA/datasets/source-spatial-task0-10/manifest.json" ;;
  source_reset_solvability)
    python -m xvla_rlinf.source_reset_solvability --audit "${4:?physics audit report}" ;;
  source_reset_sft)
@@ -201,7 +204,15 @@ if not checkpoint.is_relative_to(root):
 print(checkpoint)
 PY
    )"
-   python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$checkpoint" ;;
+   python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$checkpoint"
+   dispatch_status=0
+   python "$repo/tools/xvla/e2_dispatch.py" advance --repo "$repo" --data "$FYP_XVLA_DATA" \
+     --partition "${9:?E2 Slurm partition}" --job-id "$SLURM_JOB_ID" --pool "${8:?E2 condition}" || dispatch_status=$?
+   if ((dispatch_status == 75)); then
+     echo 'E2 endpoint verified. Successor awaits available Slurm resources.'
+   elif ((dispatch_status)); then
+     exit "$dispatch_status"
+   fi ;;
  sft_fewshot)
    python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$XVLA_RUN_DIR/sft_fewshot-smoke/checkpoints/global_step_${sft_steps}/actor" ;;
  sft_source10|sft_source10_lora)

@@ -1,5 +1,5 @@
 param(
-    [Parameter(Position=0)][ValidateSet('audit','sync','bootstrap','download','submit','status','logs','session')][string]$Command='audit',
+    [Parameter(Position=0)][ValidateSet('audit','sync','bootstrap','download','submit','status','logs','session','e2-start','e2-status')][string]$Command='audit',
     [Parameter(Position=1)][string]$Value='unit',
     [ValidateSet('libero','pt')][string]$Model='libero',
     [int]$Gpus=1,
@@ -10,6 +10,8 @@ param(
     [ValidateRange(1,50)][int]$Trials=5,
     [ValidatePattern('^[0-9]+$')][string]$CheckpointJobId,
     [ValidatePattern('^[0-9]+$')][string]$AuditJobId,
+    [ValidatePattern('^[0-9]+$')][string]$DeployedJobId,
+    [ValidatePattern('^[0-9]+$')][string]$OnlineJobId,
     [ValidateSet('256','1024')][string]$SftSteps='256',
     [ValidateSet('reference','expanded','stratified')][string]$ResetPool
 )
@@ -27,6 +29,17 @@ function Invoke-XRemote([string]$Script) {
 $sha=(& git -C $repoRoot rev-parse HEAD).Trim()
 $snapshot="$($settings.RunCodeRoot)/$sha"
 switch ($Command) {
+ 'e2-start' {
+  if (-not ($DeployedJobId -and $OnlineJobId -and $AuditJobId)) {
+   throw 'E2 start requires the deployed, online and physical E1 job IDs'
+  }
+  Invoke-XRemote @"
+'$($settings.CondaRoot)/envs/vla_budget_rl/bin/python' '$snapshot/tools/xvla/e2_dispatch.py' start --repo '$snapshot' --data '$data' --partition '$($settings.Partition)' --deployed-job-id '$DeployedJobId' --online-job-id '$OnlineJobId' --physical-job-id '$AuditJobId'
+"@
+ }
+ 'e2-status' {
+  Invoke-XRemote "cat '$data/protocol_20261110/e2_dispatch.json'"
+ }
  'session' {
   # One persistent connection for serial diagnostics during unstable VPN links.
   $initialize=@"
