@@ -10,7 +10,7 @@ BENCHMARK_MODELS = {
     'benchmark_sft_fewshot': 'sft-fewshot',
 }
 PT_RL_MODES = ('ppo_pt', 'grpo_pt')
-GPU_MODEL_MODES = (*BENCHMARK_MODELS, 'convert_fewshot', 'sft_fewshot')
+GPU_MODEL_MODES = (*BENCHMARK_MODELS, *PT_RL_MODES, 'convert_fewshot', 'sft_fewshot')
 FEWSHOT_DATASET = Path('datasets/fewshot-spatial-task0-5')
 FEWSHOT_SFT_RUN = 'sft_fewshot-smoke'
 FEWSHOT_SFT_STEP = 256
@@ -44,7 +44,7 @@ def checked_sft_checkpoint(args, run_name, step):
 
 def benchmark_settings(args):
     if args.gpu_model is not None and args.mode not in GPU_MODEL_MODES:
-        raise ValueError('--gpu-model applies only to benchmark and few-shot data/SFT modes')
+        raise ValueError('--gpu-model applies only to benchmark and Pt few-shot pipeline modes')
     model = BENCHMARK_MODELS.get(args.mode)
     if model is None:
         if (args.start_task, args.task_count, args.trials) != (0, 10, 5):

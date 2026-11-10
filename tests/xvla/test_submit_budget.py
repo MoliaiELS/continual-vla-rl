@@ -114,7 +114,8 @@ class BenchmarkSubmissionTests(unittest.TestCase):
                 self.assertEqual(run.call_count, 2)
 
     def test_benchmark_requests_selected_model_and_retains_default(self):
-        for mode, selected, expected in (('benchmark_pt', '3090', '3090'), ('ppo', None, '4090')):
+        for mode, selected, expected in (('benchmark_pt', '3090', '3090'),
+                                         ('ppo_pt', '3090', '3090'), ('ppo', None, '4090')):
             with self.subTest(mode=mode), TemporaryDirectory() as directory:
                 data = Path(directory)
                 args = self.arguments(mode=mode, gpu_model=selected, data=data, repo=data)

@@ -89,10 +89,10 @@ echo XVLA_DOWNLOAD_PID=`$!
   } elseif ($StartTask -ne 0 -or $TaskCount -ne 10 -or $Trials -ne 5) {
    throw 'Benchmark shard options require a benchmark mode'
   }
-  if ($isBenchmark -or $Value -in @('convert_fewshot','sft_fewshot')) {
+  if ($isBenchmark -or $Value -in @('convert_fewshot','sft_fewshot','ppo_pt','grpo_pt')) {
    $submitOptions += " --gpu-model $GpuModel"
   } elseif ($PSBoundParameters.ContainsKey('GpuModel')) {
-   throw 'GPU model override applies only to benchmark and few-shot data/SFT modes'
+   throw 'GPU model override applies only to benchmark and Pt few-shot pipeline modes'
   }
   if ($Value -in @('benchmark_sft_smoke','benchmark_sft_fewshot','ppo_pt','grpo_pt')) {
    if (-not $CheckpointJobId) { throw "$Value requires -CheckpointJobId" }
