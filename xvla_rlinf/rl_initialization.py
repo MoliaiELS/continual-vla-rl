@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 
 from .checkpoint_check import read_evidence
 from .sft import PT_ID, PT_REVISION
@@ -26,6 +27,17 @@ def read_sft_source(checkpoint_dir, model_cfg):
             or check.get("digest") != evidence["digest"] or check.get("exported_digest") != evidence["digest"]
             or check.get("model_config") != source_cfg):
         raise ValueError("SFT initialization requires a matching independent strict full-state audit")
+    sft_data = json.loads((checkpoint_dir / "xvla_sft_data_state.json").read_text(encoding="utf-8"))
+    ranks = sft_data.get("ranks", [])
+    if sft_data.get("version") != 1 or len(ranks) != 1:
+        raise ValueError("Expected single-rank SFT data state at the source checkpoint")
+    data = ranks[0]
+    optimizer_steps = data.get("optimizer_steps")
+    manifest_digest = data.get("manifest_sha256")
+    if (data.get("rank") != 0 or data.get("world_size") != 1
+            or type(optimizer_steps) is not int or optimizer_steps < 1
+            or not isinstance(manifest_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", manifest_digest)):
+        raise ValueError("Source must identify a completed SFT update and its data manifest")
 
     model_path = Path(model_cfg["model_path"]).resolve()
     if Path(source_cfg["model_path"]).resolve() != model_path:
@@ -44,7 +56,7 @@ def read_sft_source(checkpoint_dir, model_cfg):
             raise ValueError("SFT and RL must use the same FP32 domain-3 prompt-head layout")
     if source_cfg.get("add_value_head") is not False:
         raise ValueError("SFT source must contain no value head")
-    return evidence, weights, check
+    return evidence, weights, check, data
 
 
 def validate_rl_initialization(cfg):
@@ -97,7 +109,7 @@ def initialize_from_sft(model, model_cfg):
     import torch
     from .audit_workers import state_digest
 
-    evidence, weights, check = read_sft_source(checkpoint, model_cfg)
+    evidence, weights, check, data = read_sft_source(checkpoint, model_cfg)
     state = torch.load(weights, map_location="cpu", weights_only=True)
     if not isinstance(state, dict) or state_digest(state) != evidence["digest"]:
         raise RuntimeError("SFT full-state export does not match the audited digest")
@@ -113,6 +125,8 @@ def initialize_from_sft(model, model_cfg):
         raise RuntimeError("SFT initialization modified the configured RL sampler")
     record = {"checkpoint": str(checkpoint), "base_repo_id": PT_ID, "base_revision": PT_REVISION,
               "source_sft_job_id": check.get("identity", {}).get("slurm_job_id"),
+              "source_sft_optimizer_steps": data["optimizer_steps"],
+              "source_sft_manifest_sha256": data["manifest_sha256"],
               "source_state_sha256": evidence["digest"], "source_core_sha256": source_core_digest,
               "restored_core_sha256": restored_digest, "restored_core_tensors": len(restored),
               "source_sft_sampler_std": state["sampler.std"].tolist(),

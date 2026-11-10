@@ -84,6 +84,7 @@ class InitializationReceiptTests(unittest.TestCase):
         self.evidence = {"model_config": self.source_cfg, "digest": "a" * 64}
         self.check = {"status": "PASS", "strict_state_load": True, "digest": "a" * 64,
                       "exported_digest": "a" * 64, "model_config": self.source_cfg}
+        self.data = {"rank": 0, "world_size": 1, "optimizer_steps": 1, "manifest_sha256": "b" * 64}
         (self.base / "verified.json").write_text(json.dumps({"repo_id": PT_ID, "revision": PT_REVISION}))
         self.write_audit()
 
@@ -96,6 +97,7 @@ class InitializationReceiptTests(unittest.TestCase):
     def write_audit(self):
         (self.checkpoint / "xvla_evidence.json").write_text(json.dumps(self.evidence))
         (self.checkpoint / "checkpoint_check.json").write_text(json.dumps(self.check))
+        (self.checkpoint / "xvla_sft_data_state.json").write_text(json.dumps({"version": 1, "ranks": [self.data]}))
 
     def cfg(self, *, initialize=True, **runner):
         return SimpleNamespace(actor=SimpleNamespace(model=self.model_config(True, initialize)),
@@ -103,10 +105,17 @@ class InitializationReceiptTests(unittest.TestCase):
                                runner={"require_sft_initialization": True, **runner})
 
     def test_audited_pt_source_passes_with_a_new_rl_value_head(self):
-        evidence, weights, _ = read_sft_source(self.checkpoint, self.model_config(True))
+        evidence, weights, _, data = read_sft_source(self.checkpoint, self.model_config(True))
         self.assertEqual(evidence, self.evidence)
         self.assertEqual(weights, self.weights)
+        self.assertEqual(data, self.data)
         validate_rl_initialization(self.cfg())
+
+    def test_rejects_checkpoint_without_a_completed_sft_update(self):
+        self.data["optimizer_steps"] = 0
+        self.write_audit()
+        with self.assertRaisesRegex(ValueError, "completed SFT update"):
+            read_sft_source(self.checkpoint, self.model_config(False))
 
     def test_rejects_audit_digest_or_configuration_disagreement(self):
         self.check["exported_digest"] = "b" * 64
