@@ -54,6 +54,8 @@ case "$mode" in
  imports) python -m xvla_rlinf.smoke imports ;;
  source_reset_audit)
    python -m xvla_rlinf.source_reset_audit --start-trial 30 --trials 10 --along-offset-m 0.01 ;;
+ source_reset_solvability)
+   python -m xvla_rlinf.source_reset_solvability --audit "${4:?physics audit report}" ;;
  alignment) python -m xvla_rlinf.smoke alignment ;;
  native_eval) python -m xvla_rlinf.entry --config-name native_eval_smoke ;;
  stochastic_eval) python -m xvla_rlinf.entry --config-name stochastic_eval_smoke ;;
@@ -63,11 +65,15 @@ case "$mode" in
  sft_action_check)
    python -m xvla_rlinf.sft_action_check --manifest "${4:?converted manifest}" \
      --checkpoint "${5:?SFT actor checkpoint directory}" ;;
- benchmark_libero|benchmark_pt|benchmark_sft_smoke|benchmark_sft_fewshot|benchmark_sft_source10|benchmark_rl_source10)
+ benchmark_libero|benchmark_pt|benchmark_sft_smoke|benchmark_sft_fewshot|benchmark_sft_source10|benchmark_rl_source10|benchmark_sft_sequence_dev|benchmark_rl_sequence_dev)
    benchmark_model="${mode#benchmark_}"
    benchmark_args=(--start-task "${4:?start task}" --task-count "${5:?task count}" --trials "${6:?trials}"
                    --start-trial "${7:?start trial}")
-   if [[ "$mode" == benchmark_sft_source10 ]]; then benchmark_model=sft_fewshot; fi
+   if [[ "$mode" == benchmark_sft_source10 || "$mode" == benchmark_sft_sequence_dev ]]; then
+     benchmark_model=sft_fewshot
+   elif [[ "$mode" == benchmark_rl_sequence_dev ]]; then
+     benchmark_model=rl_source10
+   fi
    if [[ "$mode" == benchmark_sft_* || "$mode" == benchmark_rl_* ]]; then
      benchmark_model="${benchmark_model//_/-}"
      benchmark_args+=(--checkpoint "${8:?SFT actor checkpoint directory}")

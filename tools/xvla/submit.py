@@ -11,18 +11,22 @@ BENCHMARK_MODELS = {
     'benchmark_sft_fewshot': 'sft-fewshot',
     'benchmark_sft_source10': 'sft-fewshot',
     'benchmark_rl_source10': 'rl-source10',
+    'benchmark_sft_sequence_dev': 'sft-fewshot',
+    'benchmark_rl_sequence_dev': 'rl-source10',
 }
+SEQUENCE_DEV_MODES = ('benchmark_sft_sequence_dev', 'benchmark_rl_sequence_dev')
 SOURCE_RL_MODES = ('ppo_source10', 'grpo_source10', 'ppo_source10_pool')
 PT_RL_MODES = ('ppo_pt', 'grpo_pt', *SOURCE_RL_MODES)
 SOURCE_DATASET = Path('datasets/source-spatial-task0-10')
 CONVERSION_MODES = ('convert', 'convert_fewshot', 'convert_source10')
 GPU_MODEL_MODES = (*BENCHMARK_MODELS, *PT_RL_MODES, 'convert_fewshot', 'sft_fewshot',
-                   'replay_absolute', 'sft_action_check', 'convert_source10', 'sft_source10', 'sft_source10_lora')
+                   'replay_absolute', 'sft_action_check', 'convert_source10', 'sft_source10', 'sft_source10_lora',
+                   'source_reset_solvability')
 FEWSHOT_DATASET = Path('datasets/fewshot-spatial-task0-5')
 FEWSHOT_SFT_RUN = 'sft_fewshot-smoke'
 FEWSHOT_SFT_STEPS = (256, 1024)
 FEWSHOT_SFT_MODES = ('sft_fewshot', 'benchmark_sft_fewshot', 'sft_action_check', 'sft_source10',
-                     'sft_source10_lora', 'benchmark_sft_source10', *PT_RL_MODES)
+                     'sft_source10_lora', 'benchmark_sft_source10', 'benchmark_sft_sequence_dev', *PT_RL_MODES)
 
 def discover_task0_source(data_root: Path):
     """Read only our project's raw-data tree and pinned HF download receipt."""
@@ -66,16 +70,19 @@ def benchmark_settings(args):
         raise ValueError('Benchmark shard must be a nonempty subset of Spatial task IDs 0–9')
     if args.start_trial < 0 or args.trials < 1 or args.task_count * args.trials > 50:
         raise ValueError('Benchmark shard must contain between 1 and 50 episodes')
+    if args.mode in SEQUENCE_DEV_MODES and (args.start_task, args.task_count) != (1, 1):
+        raise ValueError('Sequence development benchmark is restricted to Spatial task 1')
 
     checkpoint = None
     if model == 'sft-smoke':
         checkpoint = checked_sft_checkpoint(args, 'sft-smoke', 1)
     elif model == 'rl-source10':
-        if (args.start_task, args.task_count) != (0, 1):
+        if args.mode == 'benchmark_rl_source10' and (args.start_task, args.task_count) != (0, 1):
             raise ValueError('Source-10 RL development evaluation is restricted to Spatial task 0')
         checkpoint = checked_sft_checkpoint(args, 'ppo_source10-smoke', 1)
     elif model == 'sft-fewshot':
-        run = 'sft_source10' if args.mode == 'benchmark_sft_source10' else FEWSHOT_SFT_RUN
+        run = ('sft_source10' if args.mode in ('benchmark_sft_source10', 'benchmark_sft_sequence_dev')
+               else FEWSHOT_SFT_RUN)
         if args.mode == 'benchmark_sft_source10' and (args.start_task, args.task_count) != (0, 1):
             raise ValueError('Source-10 development evaluation is restricted to Spatial task 0')
         checkpoint = checked_sft_checkpoint(args, run, args.sft_steps)
@@ -133,7 +140,8 @@ def require_fewshot_manifest(data, dataset=FEWSHOT_DATASET, demonstrations=5):
 def main():
     p=argparse.ArgumentParser();p.add_argument('--repo',type=Path,required=True);p.add_argument('--data',type=Path,required=True)
     p.add_argument('--mode', choices=[
-        'unit', 'imports', 'source_reset_audit', 'alignment', 'native_eval', 'stochastic_eval', *CONVERSION_MODES,
+        'unit', 'imports', 'source_reset_audit', 'source_reset_solvability',
+        'alignment', 'native_eval', 'stochastic_eval', *CONVERSION_MODES,
         'sft', 'ppo', 'grpo', 'grpo_exploration', 'grpo_stress',
         'sft_fewshot', 'sft_source10', 'sft_source10_lora', 'replay_absolute', 'sft_action_check',
         *PT_RL_MODES, *BENCHMARK_MODELS,
@@ -145,12 +153,15 @@ def main():
     p.add_argument('--start-trial', type=int, default=0)
     p.add_argument('--trials', type=int, default=5)
     p.add_argument('--checkpoint-job-id')
+    p.add_argument('--audit-job-id')
     p.add_argument('--reset-pool', choices=('reference', 'expanded', 'stratified'))
     p.add_argument('--sft-steps', type=int, choices=FEWSHOT_SFT_STEPS, default=FEWSHOT_SFT_STEPS[0])
     p.add_argument('--convert-output',type=Path)
     p.add_argument('--convert-demonstrations',type=int,choices=[1,2])
     p.add_argument('--seed',type=int,default=1234)
     a=p.parse_args()
+    if (a.audit_job_id is not None) != (a.mode == 'source_reset_solvability'):
+        raise ValueError('--audit-job-id is required only for source reset solvability')
     if (a.reset_pool is not None) != (a.mode == 'ppo_source10_pool'):
         raise ValueError('--reset-pool is required only for the source pool pilot')
     if a.mode == 'source_reset_audit' and a.gpus != 0:
@@ -192,6 +203,13 @@ def main():
         manifest = require_fewshot_manifest(a.data)
         checkpoint = checked_sft_checkpoint(a, FEWSHOT_SFT_RUN, a.sft_steps)
         extra = [str(manifest), checkpoint]
+    if a.mode == 'source_reset_solvability':
+        if not re.fullmatch('[0-9]+', a.audit_job_id):
+            raise ValueError('Source reset solvability requires a numeric audit job ID')
+        audit = a.data.resolve() / 'runs' / a.audit_job_id / 'source_reset_audit.json'
+        if not audit.is_file():
+            raise FileNotFoundError(audit)
+        extra = [str(audit)]
     if a.mode in PT_RL_MODES:
         run = 'sft_source10' if a.mode in SOURCE_RL_MODES else FEWSHOT_SFT_RUN
         checkpoint = checked_sft_checkpoint(a, run, a.sft_steps)
