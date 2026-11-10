@@ -108,6 +108,7 @@ class _SourceResetEnv:
         self._source_rng = np.random.default_rng(np.random.SeedSequence([self._source_plan.seed, seed_offset]))
         self._source_rollout_index = 0
         self._source_reset_pending = None
+        self._source_active_rollout = None
         self._source_reset_log = Path(os.environ["XVLA_RUN_DIR"]) / f"source_resets_{seed_offset}.jsonl"
         group_size = cfg.group_size
         if type(group_size) is not int or group_size < 1 or num_envs < 1 or num_envs % group_size:
@@ -122,11 +123,32 @@ class _SourceResetEnv:
         # Task 0 trial IDs are the first range in LIBERO's global reset IDs.
         return self._source_plan.sample(self._source_rng, num_reset_states)
 
+    def _write_source_event(self, row):
+        line = json.dumps(row)
+        with self._source_reset_log.open("a", encoding="utf-8") as stream:
+            stream.write(line + "\n")
+        print("XVLA_SOURCE_RESETS " + line, flush=True)
+
+    def update_reset_state_ids(self):
+        if self._source_active_rollout is not None:
+            row = self._source_active_rollout
+            steps = (self._xvla_policy_steps - self._source_policy_at_reset).tolist()
+            settling = (self._xvla_settling_steps - self._source_settling_at_reset).tolist()
+            if not self._xvla_finished.all() or min(steps) < 1:
+                raise RuntimeError("Source rollout ended without a terminal or truncated episode for each reset")
+            self._write_source_event({**row, "event": "source_rollout_completed",
+                                      "policy_env_steps": steps, "settling_env_steps": settling,
+                                      "success": self.success_once.tolist()})
+            self._source_active_rollout = None
+        super().update_reset_state_ids()
+
     def reset(self, env_idx=None, reset_state_ids=None):
         if not self.is_start or env_idx is not None or reset_state_ids is not None:
             raise RuntimeError("Source reset pools support only complete grouped rollout resets")
-        if self._source_reset_pending is not None:
-            raise RuntimeError("Source reset was replaced before any policy action executed")
+        if self._source_reset_pending is not None or self._source_active_rollout is not None:
+            raise RuntimeError("Source reset was replaced before its rollout completed")
+        self._source_policy_at_reset = self._xvla_policy_steps.copy()
+        self._source_settling_at_reset = self._xvla_settling_steps.copy()
         result = super().reset(env_idx=env_idx, reset_state_ids=reset_state_ids)
         trials = self.trial_ids.tolist()
         if (len(trials) != self.num_envs or not np.all(self.task_ids == 0)
@@ -161,10 +183,8 @@ class _SourceResetEnv:
                 "group_trial_ids": trials[::self.group_size],
                 "first_chunk_policy_env_steps": policy_steps,
             }
-            line = json.dumps(row)
-            with self._source_reset_log.open("a", encoding="utf-8") as stream:
-                stream.write(line + "\n")
-            print("XVLA_SOURCE_RESETS " + line, flush=True)
+            self._write_source_event(row)
+            self._source_active_rollout = row
             self._source_reset_pending = None
             self._source_rollout_index += 1
         return result

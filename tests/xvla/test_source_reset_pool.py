@@ -32,11 +32,15 @@ class FakeLibero:
 
     def reset(self, env_idx=None, reset_state_ids=None):
         self.is_start = False
+        self._xvla_settling_steps += 10
+        self._xvla_finished[:] = False
         self.trial_ids = self.reset_state_ids.copy()
         self.task_ids = np.zeros_like(self.trial_ids)
         return "observation", {}
 
     def chunk_step(self, actions):
+        self._xvla_policy_steps += actions.sum(axis=1)
+        self._xvla_finished[:] = True
         return "observation", None, None, None, [{"executed_mask": actions}]
 
 
@@ -113,6 +117,10 @@ class SourceResetPoolTests(unittest.TestCase):
     def test_worker_logs_actual_grouped_resets_once_per_first_chunk(self):
         worker = source_reset_worker(FakeWorker)()
         env = worker._setup_env_and_wrappers(FakeLibero, self.config(), 4)
+        env._xvla_policy_steps = np.full(4, 50)
+        env._xvla_settling_steps = np.full(4, 20)
+        env._xvla_finished = np.zeros(4, dtype=bool)
+        env.success_once = np.array([True, False, True, True])
         log = self.root / "source_resets_0.jsonl"
         self.assertFalse(log.exists())
         env.reset()
@@ -128,6 +136,11 @@ class SourceResetPoolTests(unittest.TestCase):
         self.assertEqual(row["trial_ids"], [trial for trial in row["group_trial_ids"] for _ in range(2)])
         self.assertEqual(row["first_chunk_policy_env_steps"], [2, 1, 1, 2])
         env.update_reset_state_ids()
+        completion = json.loads(log.read_text().splitlines()[-1])
+        self.assertEqual(completion["event"], "source_rollout_completed")
+        self.assertEqual(completion["policy_env_steps"], [4, 2, 2, 4])
+        self.assertEqual(completion["settling_env_steps"], [10, 10, 10, 10])
+        self.assertEqual(completion["success"], [True, False, True, True])
         env.is_start = True
         env.reset()
         env.chunk_step(first_chunk)
