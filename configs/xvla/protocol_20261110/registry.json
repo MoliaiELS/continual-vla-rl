@@ -24,7 +24,7 @@
     "actor_state_sha256": "b584a11131874fc5d1c190af5859c4fab61e8c18d7f9de5b186b8885e6977e2f",
     "strict_reload_evidence": "runs/19525/sft_source10/checkpoints/global_step_1024/actor/checkpoint_check.json",
     "manifest": "datasets/source-spatial-task0-10/manifest.json",
-    "manifest_sha256": "0a3d6d871939e3365cd8719e94f2c6946cf40a594643c579cc82f733cb245bd77",
+    "manifest_sha256": "0a3d6d871939e3365cd8719e94f2c6946cf40a594643c579cc82f73cb245bd77",
     "raw_demo_data_revision": "f13aa24a3da8c43c7225569f28c562979fa0e35a",
     "raw_demo_file_sha256": "ff6f26121653c77280eb40a38773a74141c11a8509f3466058cb56dd2cc60ead",
     "demo_ids": [46, 47, 18, 45, 8, 43, 44, 7, 12, 36],
