@@ -25,7 +25,8 @@ MODEL_REVISIONS = {
     "pt": ("2toINF/X-VLA-Pt", "c1c4a64a7e03ac5b95c468bf1578f3d03651b53b"),
 }
 TRIAL_FIELDS = ("task_id", "trial_id", "environment_seed", "policy_seed")
-SFT_MODELS = ("sft-smoke", "sft-fewshot")
+RL_MODEL = "rl-source10"
+CHECKPOINT_MODELS = ("sft-smoke", "sft-fewshot", RL_MODEL)
 
 
 def build_trials(start_task: int, task_count: int, trials: int, *, start_trial: int = 0) -> list[dict]:
@@ -83,15 +84,26 @@ def summarize(episodes: list[dict], plan: list[dict]) -> dict:
             "macro_success_rate": sum(row["success_rate"] for row in tasks.values()) / len(tasks)}
 
 
-def _sft_layout(saved, model_path):
+def _checkpoint_layout(saved, model_path, *, is_rl):
     saved_xvla = saved.get("xvla", {})
     scope = saved_xvla.get("update_scope")
-    if (Path(saved["model_path"]).resolve() != model_path or saved.get("add_value_head") is not False
+    if (Path(saved["model_path"]).resolve() != model_path
             or saved.get("num_action_chunks") != CHUNK or scope not in ("prompt_heads", "lora_heads")
             or any(saved_xvla.get(key) != value for key, value in {
                 "domain_rows": [DOMAIN], "domain_id": DOMAIN, "steps": SOLVER_STEPS,
             }.items())):
-        raise ValueError("SFT policy layout must match the fixed Pt domain-3 protocol")
+        raise ValueError("Checkpoint policy layout must match the fixed Pt domain-3 protocol")
+    value_head = saved.get("add_value_head")
+    if is_rl:
+        source = saved_xvla.get("initial_sft_checkpoint")
+        rank = saved_xvla.get("lora_rank", 8)
+        if (scope != "lora_heads" or type(rank) is not int or rank != 8
+                or type(value_head) is not bool or saved.get("action_dim") != 7
+                or not isinstance(source, str) or not source.strip()):
+            raise ValueError("Source-10 RL checkpoint requires rank-8 LoRA and an SFT initialization path")
+        return {"update_scope": scope, "lora_rank": rank}
+    if value_head is not False:
+        raise ValueError("SFT checkpoint must contain no value head")
     layout = {"update_scope": scope}
     if scope == "lora_heads" and "lora_rank" in saved_xvla:
         rank = saved_xvla["lora_rank"]
@@ -106,8 +118,9 @@ def _load_policy(model_name, checkpoint):
     from omegaconf import OmegaConf
     from .policy import XVLAPolicy
 
-    is_sft = model_name in SFT_MODELS
-    base = "pt" if is_sft else model_name
+    is_checkpoint = model_name in CHECKPOINT_MODELS
+    is_rl = model_name == RL_MODEL
+    base = "pt" if is_checkpoint else model_name
     model_path = Path(os.environ["XVLA_PT_MODEL_PATH" if base == "pt" else "XVLA_MODEL_PATH"]).resolve()
     repo_id, revision = MODEL_REVISIONS[base]
     receipt = json.loads((model_path / "verified.json").read_text(encoding="utf-8"))
@@ -121,7 +134,7 @@ def _load_policy(model_name, checkpoint):
                  "image_orientation": "native_raw", "rotation_backend": "robosuite"},
     })
     provenance = {"name": model_name, "repo_id": repo_id, "revision": revision, "model_path": str(model_path)}
-    if is_sft:
+    if is_checkpoint:
         from .audit_workers import state_digest
         from .checkpoint_check import read_evidence
 
@@ -131,19 +144,26 @@ def _load_policy(model_name, checkpoint):
         if (check.get("status") != "PASS" or check.get("strict_state_load") is not True
                 or check.get("digest") != evidence["digest"] or check.get("exported_digest") != evidence["digest"]
                 or check.get("model_config") != evidence["model_config"]):
-            raise ValueError("SFT checkpoint must pass the independent strict full-state audit")
-        layout = _sft_layout(evidence["model_config"], model_path)
+            raise ValueError("Checkpoint must pass the independent strict full-state audit")
+        if is_rl and check.get("fixed_probe", {}).get("status") != "PASS":
+            raise ValueError("RL checkpoint must pass the independent fixed observation and noise probe")
+        saved = evidence["model_config"]
+        layout = _checkpoint_layout(saved, model_path, is_rl=is_rl)
         config.xvla.update(layout)
+        config.add_value_head = saved["add_value_head"]
         if layout["update_scope"] == "lora_heads":
             provenance.update(layout)
+        if is_rl:
+            provenance.update(add_value_head=config.add_value_head,
+                              initial_sft_checkpoint=saved["xvla"]["initial_sft_checkpoint"])
 
     model = XVLAPolicy.from_checkpoint(config, torch.float32)
     if model.core.num_actions != CHUNK:
         raise ValueError("Native X-VLA checkpoint action horizon must be 30")
-    if is_sft:
+    if is_checkpoint:
         state = torch.load(weights, map_location="cpu", weights_only=True)
         if state_digest(state) != evidence["digest"]:
-            raise RuntimeError("SFT export changed since its independent audit")
+            raise RuntimeError("Checkpoint export changed since its independent audit")
         model.load_state_dict(state, strict=True)
         del state
         provenance.update(checkpoint=str(checkpoint), checkpoint_state_sha256=evidence["digest"])
@@ -244,15 +264,15 @@ def _write_summary(path, record):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", choices=("libero", "pt", *SFT_MODELS), required=True)
+    parser.add_argument("--model", choices=("libero", "pt", *CHECKPOINT_MODELS), required=True)
     parser.add_argument("--start-task", type=int, default=0)
     parser.add_argument("--task-count", type=int, default=10)
     parser.add_argument("--start-trial", type=int, default=0, help="First initial-state index in each task")
     parser.add_argument("--trials", type=int, default=5)
-    parser.add_argument("--checkpoint", type=Path, help="Audited SFT actor checkpoint directory")
+    parser.add_argument("--checkpoint", type=Path, help="Independently audited SFT or RL actor checkpoint")
     args = parser.parse_args(argv)
-    if (args.checkpoint is not None) != (args.model in SFT_MODELS):
-        parser.error("--checkpoint is required for SFT models and applies only to them")
+    if (args.checkpoint is not None) != (args.model in CHECKPOINT_MODELS):
+        parser.error("--checkpoint is required for SFT and RL models and applies only to them")
     try:
         plan = build_trials(args.start_task, args.task_count, args.trials, start_trial=args.start_trial)
     except ValueError as error:

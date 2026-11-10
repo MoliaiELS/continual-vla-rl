@@ -85,7 +85,7 @@ echo XVLA_DOWNLOAD_PID=`$!
  'submit' {
   if ($Value -notmatch '^[a-z0-9_-]+$' -or $Gpus -notin @(0,1,2)) { throw 'Invalid X-VLA mode or GPU count' }
   $submitOptions=''
-  $isBenchmark=$Value -in @('benchmark_libero','benchmark_pt','benchmark_sft_smoke','benchmark_sft_fewshot','benchmark_sft_source10')
+  $isBenchmark=$Value -in @('benchmark_libero','benchmark_pt','benchmark_sft_smoke','benchmark_sft_fewshot','benchmark_sft_source10','benchmark_rl_source10')
   $isPtRl=$Value -in @('ppo_pt','grpo_pt','ppo_source10','grpo_source10')
   if ($isBenchmark) {
    $submitOptions += " --start-task $StartTask --task-count $TaskCount --start-trial $StartTrial --trials $Trials"
@@ -98,7 +98,7 @@ echo XVLA_DOWNLOAD_PID=`$!
   } elseif ($PSBoundParameters.ContainsKey('GpuModel')) {
    throw 'GPU model override applies only to benchmark and Pt few-shot pipeline modes'
   }
-  if ($isPtRl -or $Value -in @('benchmark_sft_smoke','benchmark_sft_fewshot','benchmark_sft_source10','sft_source10_lora','sft_action_check')) {
+  if ($isPtRl -or $Value -in @('benchmark_sft_smoke','benchmark_sft_fewshot','benchmark_sft_source10','benchmark_rl_source10','sft_source10_lora','sft_action_check')) {
    if (-not $CheckpointJobId) { throw "$Value requires -CheckpointJobId" }
    $submitOptions += " --checkpoint-job-id $CheckpointJobId"
   } elseif ($CheckpointJobId) {

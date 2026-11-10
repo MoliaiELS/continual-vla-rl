@@ -9,6 +9,7 @@ BENCHMARK_MODELS = {
     'benchmark_sft_smoke': 'sft-smoke',
     'benchmark_sft_fewshot': 'sft-fewshot',
     'benchmark_sft_source10': 'sft-fewshot',
+    'benchmark_rl_source10': 'rl-source10',
 }
 SOURCE_RL_MODES = ('ppo_source10', 'grpo_source10')
 PT_RL_MODES = ('ppo_pt', 'grpo_pt', *SOURCE_RL_MODES)
@@ -68,6 +69,10 @@ def benchmark_settings(args):
     checkpoint = None
     if model == 'sft-smoke':
         checkpoint = checked_sft_checkpoint(args, 'sft-smoke', 1)
+    elif model == 'rl-source10':
+        if (args.start_task, args.task_count) != (0, 1):
+            raise ValueError('Source-10 RL development evaluation is restricted to Spatial task 0')
+        checkpoint = checked_sft_checkpoint(args, 'ppo_source10-smoke', 1)
     elif model == 'sft-fewshot':
         run = 'sft_source10' if args.mode == 'benchmark_sft_source10' else FEWSHOT_SFT_RUN
         if args.mode == 'benchmark_sft_source10' and (args.start_task, args.task_count) != (0, 1):
@@ -127,7 +132,7 @@ def require_fewshot_manifest(data, dataset=FEWSHOT_DATASET, demonstrations=5):
 def main():
     p=argparse.ArgumentParser();p.add_argument('--repo',type=Path,required=True);p.add_argument('--data',type=Path,required=True)
     p.add_argument('--mode', choices=[
-        'unit', 'imports', 'alignment', 'native_eval', 'stochastic_eval', *CONVERSION_MODES,
+        'unit', 'imports', 'source_reset_audit', 'alignment', 'native_eval', 'stochastic_eval', *CONVERSION_MODES,
         'sft', 'ppo', 'grpo', 'grpo_exploration', 'grpo_stress',
         'sft_fewshot', 'sft_source10', 'sft_source10_lora', 'replay_absolute', 'sft_action_check',
         *PT_RL_MODES, *BENCHMARK_MODELS,
@@ -144,7 +149,9 @@ def main():
     p.add_argument('--convert-demonstrations',type=int,choices=[1,2])
     p.add_argument('--seed',type=int,default=1234)
     a=p.parse_args()
-    if a.mode not in ('unit','imports') and a.gpus!=1:
+    if a.mode == 'source_reset_audit' and a.gpus != 0:
+        raise ValueError('Unrendered source reset audit requires --gpus 0')
+    if a.mode not in ('unit','imports','source_reset_audit') and a.gpus!=1:
         raise ValueError('Model, simulation and online audit modes require exactly one GPU')
     if a.sft_steps != FEWSHOT_SFT_STEPS[0] and a.mode not in FEWSHOT_SFT_MODES:
         raise ValueError('--sft-steps applies only to few-shot SFT and its consumers')
@@ -215,7 +222,7 @@ def submit_locked(a,conversion,extra,benchmark=None,initial_sft=None):
         allocated+=gpu_commitment(info)
     if a.gpus+allocated>2:
         raise RuntimeError(f'BLOCKED_GPU_BUDGET: requested={a.gpus}, own active/pending commitment={allocated}, cap=2; no job submitted')
-    if a.mode not in ('unit','imports') and a.gpus==0:raise ValueError('Real model/rollout smoke requires explicit GPU allocation')
+    if a.mode not in ('unit','imports','source_reset_audit') and a.gpus==0:raise ValueError('Real model/rollout smoke requires explicit GPU allocation')
     cmd=['sbatch','--parsable','--partition='+a.partition,'--exclude=4090node1','--nodes=1','--ntasks=1',
          '--cpus-per-task=8','--time=01:00:00','--job-name=xvla-'+a.mode,
          '--output='+str(a.data/'logs/%j.out'),'--error='+str(a.data/'logs/%j.err')]

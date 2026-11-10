@@ -46,12 +46,14 @@ import importlib.util,json,os,sys,rlinf,torch,transformers,peft
 from pathlib import Path
 specs={name:(getattr(importlib.util.find_spec(name),'origin',None)) for name in ['rlinf','transformers','prismatic','libero.libero','xvla_rlinf']}
 print(json.dumps({'python':sys.executable,'imports':specs,'torch':torch.__version__,'transformers':transformers.__version__,'peft':peft.__version__}),flush=True)
-uuids=[str(torch.cuda.get_device_properties(i).uuid) for i in range(torch.cuda.device_count())]
+uuids=[str(torch.cuda.get_device_properties(i).uuid) for i in range(torch.cuda.device_count())] if int(os.environ["XVLA_ALLOCATED_GPUS"]) else []
 (Path(os.environ['XVLA_RUN_DIR'])/'allocated_gpu_uuids.json').write_text(json.dumps(uuids))
 PY
 case "$mode" in
  unit) python -m unittest discover -s "$repo/tests/xvla" -v 2>&1 | tee "$XVLA_RUN_DIR/unit.log" ;;
  imports) python -m xvla_rlinf.smoke imports ;;
+ source_reset_audit)
+   python -m xvla_rlinf.source_reset_audit --start-trial 30 --trials 10 --along-offset-m 0.01 ;;
  alignment) python -m xvla_rlinf.smoke alignment ;;
  native_eval) python -m xvla_rlinf.entry --config-name native_eval_smoke ;;
  stochastic_eval) python -m xvla_rlinf.entry --config-name stochastic_eval_smoke ;;
@@ -61,12 +63,12 @@ case "$mode" in
  sft_action_check)
    python -m xvla_rlinf.sft_action_check --manifest "${4:?converted manifest}" \
      --checkpoint "${5:?SFT actor checkpoint directory}" ;;
- benchmark_libero|benchmark_pt|benchmark_sft_smoke|benchmark_sft_fewshot|benchmark_sft_source10)
+ benchmark_libero|benchmark_pt|benchmark_sft_smoke|benchmark_sft_fewshot|benchmark_sft_source10|benchmark_rl_source10)
    benchmark_model="${mode#benchmark_}"
    benchmark_args=(--start-task "${4:?start task}" --task-count "${5:?task count}" --trials "${6:?trials}"
                    --start-trial "${7:?start trial}")
    if [[ "$mode" == benchmark_sft_source10 ]]; then benchmark_model=sft_fewshot; fi
-   if [[ "$mode" == benchmark_sft_* ]]; then
+   if [[ "$mode" == benchmark_sft_* || "$mode" == benchmark_rl_* ]]; then
      benchmark_model="${benchmark_model//_/-}"
      benchmark_args+=(--checkpoint "${8:?SFT actor checkpoint directory}")
    fi

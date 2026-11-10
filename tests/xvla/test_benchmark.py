@@ -3,7 +3,7 @@
 import unittest
 from pathlib import Path
 
-from xvla_rlinf.benchmark import _sft_layout, build_trials, summarize
+from xvla_rlinf.benchmark import _checkpoint_layout, build_trials, summarize
 
 
 def completed(trial, *, success, steps):
@@ -64,7 +64,7 @@ class BenchmarkAccountingTests(unittest.TestCase):
                 build_trials(0, 1, 20, start_trial=start_trial)
 
 
-class BenchmarkSftLayoutTests(unittest.TestCase):
+class BenchmarkCheckpointLayoutTests(unittest.TestCase):
     def setUp(self):
         self.pt_path = (Path.cwd() / "X-VLA-Pt").resolve()
         self.config = {
@@ -73,19 +73,43 @@ class BenchmarkSftLayoutTests(unittest.TestCase):
         }
 
     def test_preserves_prompt_heads(self):
-        self.assertEqual(_sft_layout(self.config, self.pt_path), {"update_scope": "prompt_heads"})
+        self.assertEqual(_checkpoint_layout(self.config, self.pt_path, is_rl=False),
+                         {"update_scope": "prompt_heads"})
 
     def test_uses_saved_lora_rank_without_copying_training_settings(self):
         self.config["xvla"].update(update_scope="lora_heads", lora_rank=16,
                                    eval_sampler="terminal_clean_gaussian_v1")
-        self.assertEqual(_sft_layout(self.config, self.pt_path), {"update_scope": "lora_heads", "lora_rank": 16})
+        self.assertEqual(_checkpoint_layout(self.config, self.pt_path, is_rl=False),
+                         {"update_scope": "lora_heads", "lora_rank": 16})
 
     def test_rejects_invalid_lora_rank_and_nonmatching_domain(self):
         self.config["xvla"]["update_scope"] = "lora_heads"
         for rank in (0, True, "8"):
             self.config["xvla"]["lora_rank"] = rank
             with self.subTest(rank=rank), self.assertRaises(ValueError):
-                _sft_layout(self.config, self.pt_path)
+                _checkpoint_layout(self.config, self.pt_path, is_rl=False)
         self.config["xvla"].update(lora_rank=8, domain_rows=[2, 3])
         with self.assertRaises(ValueError):
-            _sft_layout(self.config, self.pt_path)
+            _checkpoint_layout(self.config, self.pt_path, is_rl=False)
+
+    def test_accepts_rank8_rl_layout_with_or_without_value_head(self):
+        self.config["action_dim"] = 7
+        self.config["xvla"].update(update_scope="lora_heads", lora_rank=8,
+                                   initial_sft_checkpoint="/runs/source-sft/actor")
+        for add_value_head in (True, False):
+            with self.subTest(add_value_head=add_value_head):
+                self.config["add_value_head"] = add_value_head
+                self.assertEqual(_checkpoint_layout(self.config, self.pt_path, is_rl=True),
+                                 {"update_scope": "lora_heads", "lora_rank": 8})
+        self.config["add_value_head"] = True
+        with self.assertRaises(ValueError):
+            _checkpoint_layout(self.config, self.pt_path, is_rl=False)
+
+    def test_rl_layout_rejects_uninitialized_or_wrong_rank_export(self):
+        self.config["action_dim"] = 7
+        self.config["xvla"].update(update_scope="lora_heads", lora_rank=8)
+        with self.assertRaises(ValueError):
+            _checkpoint_layout(self.config, self.pt_path, is_rl=True)
+        self.config["xvla"].update(lora_rank=16, initial_sft_checkpoint="/runs/source-sft/actor")
+        with self.assertRaises(ValueError):
+            _checkpoint_layout(self.config, self.pt_path, is_rl=True)
