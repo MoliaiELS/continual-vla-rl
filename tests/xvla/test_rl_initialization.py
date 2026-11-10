@@ -130,8 +130,25 @@ class InitializationReceiptTests(unittest.TestCase):
             read_sft_source(self.checkpoint, different_base)
         different_domain = self.model_config(False)
         different_domain["xvla"]["domain_rows"] = [4]
-        with self.assertRaisesRegex(ValueError, "prompt-head layout"):
+        with self.assertRaisesRegex(ValueError, "FP32 domain-3"):
             read_sft_source(self.checkpoint, different_domain)
+
+    def test_lora_source_requires_matching_scope_and_rank_in_both_workers(self):
+        self.source_cfg["xvla"].update(update_scope="lora_heads", lora_rank=8)
+        self.write_audit()
+        cfg = self.cfg()
+        cfg.actor.model["xvla"].update(update_scope="lora_heads", lora_rank=8)
+        cfg.rollout.model["xvla"].update(update_scope="lora_heads")
+        validate_rl_initialization(cfg)
+
+        for rank in (4, True, "8", 0):
+            with self.subTest(rank=rank):
+                cfg.rollout.model["xvla"]["lora_rank"] = rank
+                with self.assertRaisesRegex(ValueError, "same positive X-VLA LoRA rank"):
+                    validate_rl_initialization(cfg)
+        cfg.rollout.model["xvla"].update(update_scope="prompt_heads", lora_rank=8)
+        with self.assertRaisesRegex(ValueError, "same prompt-head or LoRA-head update scope"):
+            validate_rl_initialization(cfg)
 
     def test_fresh_requires_checkpoint_and_resume_excludes_it(self):
         with self.assertRaisesRegex(ValueError, "fresh Pt RL job requires"):

@@ -48,12 +48,24 @@ def read_sft_source(checkpoint_dir, model_cfg):
 
     layout = {"model_type": "xvla", "precision": "fp32", "is_lora": False,
               "num_action_chunks": 30, "action_dim": 7}
-    domain = {"update_scope": "prompt_heads", "domain_rows": [3], "domain_id": 3, "steps": 10}
+    domain = {"domain_rows": [3], "domain_id": 3, "steps": 10}
+    source_xvla = source_cfg.get("xvla", {})
+    target_xvla = model_cfg.get("xvla", {})
+    scope = source_xvla.get("update_scope")
+    if scope not in ("prompt_heads", "lora_heads") or target_xvla.get("update_scope") != scope:
+        raise ValueError("SFT and RL must use the same prompt-head or LoRA-head update scope")
+    if scope == "lora_heads":
+        # Rank 8 is the default used by the extension model builder.
+        source_rank = source_xvla.get("lora_rank", 8)
+        target_rank = target_xvla.get("lora_rank", 8)
+        if (type(source_rank) is not int or type(target_rank) is not int
+                or source_rank < 1 or source_rank != target_rank):
+            raise ValueError("SFT and RL must use the same positive X-VLA LoRA rank")
     for cfg in (source_cfg, model_cfg):
         xvla = cfg.get("xvla", {})
         if (any(cfg.get(key) != value for key, value in layout.items())
                 or any(xvla.get(key) != value for key, value in domain.items())):
-            raise ValueError("SFT and RL must use the same FP32 domain-3 prompt-head layout")
+            raise ValueError("SFT and RL must use the same FP32 domain-3 X-VLA layout")
     if source_cfg.get("add_value_head") is not False:
         raise ValueError("SFT source must contain no value head")
     return evidence, weights, check, data
@@ -132,5 +144,8 @@ def initialize_from_sft(model, model_cfg):
               "source_sft_sampler_std": state["sampler.std"].tolist(),
               "rl_sampler_std": sampler_std.cpu().tolist(), "sampler_disposition": "retained_rl_config",
               "fresh_value_head_keys": fresh_head,
+              "update_scope": model_cfg["xvla"]["update_scope"],
               "job_id": os.environ.get("SLURM_JOB_ID"), "pid": os.getpid()}
+    if record["update_scope"] == "lora_heads":
+        record["lora_rank"] = model_cfg["xvla"].get("lora_rank", 8)
     print("XVLA_RL_INITIALIZATION " + json.dumps(record), flush=True)
