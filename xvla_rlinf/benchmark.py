@@ -28,11 +28,13 @@ TRIAL_FIELDS = ("task_id", "trial_id", "environment_seed", "policy_seed")
 SFT_MODELS = ("sft-smoke", "sft-fewshot")
 
 
-def build_trials(start_task: int, task_count: int, trials: int) -> list[dict]:
-    if any(type(value) is not int for value in (start_task, task_count, trials)):
+def build_trials(start_task: int, task_count: int, trials: int, *, start_trial: int = 0) -> list[dict]:
+    if any(type(value) is not int for value in (start_task, task_count, trials, start_trial)):
         raise ValueError("Task and trial arguments must be integers")
     if start_task < 0 or task_count < 1 or start_task + task_count > TASKS:
         raise ValueError("Spatial task range must be a nonempty interval within IDs 0 through 9")
+    if start_trial < 0:
+        raise ValueError("The starting trial ID must be nonnegative")
     if trials < 1 or task_count * trials > MAX_TRIALS_PER_JOB:
         raise ValueError(f"Evaluate between 1 and {MAX_TRIALS_PER_JOB} episodes per job")
     # The environment seed matches the pinned official client's default.
@@ -40,7 +42,7 @@ def build_trials(start_task: int, task_count: int, trials: int) -> list[dict]:
         {"task_id": task, "trial_id": trial, "environment_seed": 142 + trial,
          "policy_seed": 10_000 + 100 * task + trial}
         for task in range(start_task, start_task + task_count)
-        for trial in range(trials)
+        for trial in range(start_trial, start_trial + trials)
     ]
 
 
@@ -245,13 +247,14 @@ def main(argv=None):
     parser.add_argument("--model", choices=("libero", "pt", *SFT_MODELS), required=True)
     parser.add_argument("--start-task", type=int, default=0)
     parser.add_argument("--task-count", type=int, default=10)
+    parser.add_argument("--start-trial", type=int, default=0, help="First initial-state index in each task")
     parser.add_argument("--trials", type=int, default=5)
     parser.add_argument("--checkpoint", type=Path, help="Audited SFT actor checkpoint directory")
     args = parser.parse_args(argv)
     if (args.checkpoint is not None) != (args.model in SFT_MODELS):
         parser.error("--checkpoint is required for SFT models and applies only to them")
     try:
-        plan = build_trials(args.start_task, args.task_count, args.trials)
+        plan = build_trials(args.start_task, args.task_count, args.trials, start_trial=args.start_trial)
     except ValueError as error:
         parser.error(str(error))
 

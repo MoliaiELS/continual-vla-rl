@@ -10,7 +10,8 @@ BENCHMARK_MODELS = {
     'benchmark_sft_fewshot': 'sft-fewshot',
     'benchmark_sft_source10': 'sft-fewshot',
 }
-PT_RL_MODES = ('ppo_pt', 'grpo_pt')
+SOURCE_RL_MODES = ('ppo_source10', 'grpo_source10')
+PT_RL_MODES = ('ppo_pt', 'grpo_pt', *SOURCE_RL_MODES)
 SOURCE_DATASET = Path('datasets/source-spatial-task0-10')
 CONVERSION_MODES = ('convert', 'convert_fewshot', 'convert_source10')
 GPU_MODEL_MODES = (*BENCHMARK_MODELS, *PT_RL_MODES, 'convert_fewshot', 'sft_fewshot',
@@ -53,7 +54,7 @@ def benchmark_settings(args):
         raise ValueError('--gpu-model applies only to benchmark and Pt few-shot pipeline modes')
     model = BENCHMARK_MODELS.get(args.mode)
     if model is None:
-        if (args.start_task, args.task_count, args.trials) != (0, 10, 5):
+        if (args.start_task, args.task_count, args.start_trial, args.trials) != (0, 10, 0, 5):
             raise ValueError('Benchmark shard options require a benchmark mode')
         if args.checkpoint_job_id is not None and args.mode not in (*PT_RL_MODES, 'sft_action_check', 'sft_source10_lora'):
             raise ValueError('--checkpoint-job-id requires an SFT benchmark, warm-start, action check or Pt RL mode')
@@ -61,7 +62,7 @@ def benchmark_settings(args):
 
     if not 0 <= args.start_task < args.start_task + args.task_count <= 10:
         raise ValueError('Benchmark shard must be a nonempty subset of Spatial task IDs 0–9')
-    if args.trials < 1 or args.task_count * args.trials > 50:
+    if args.start_trial < 0 or args.trials < 1 or args.task_count * args.trials > 50:
         raise ValueError('Benchmark shard must contain between 1 and 50 episodes')
 
     checkpoint = None
@@ -75,7 +76,7 @@ def benchmark_settings(args):
     elif args.checkpoint_job_id is not None:
         raise ValueError('--checkpoint-job-id applies only to SFT benchmarks and Pt RL')
 
-    return {'model': model, 'start_task': args.start_task, 'task_count': args.task_count,
+    return {'model': model, 'start_task': args.start_task, 'task_count': args.task_count, 'start_trial': args.start_trial,
             'trials': args.trials, 'checkpoint_job_id': args.checkpoint_job_id,
             'checkpoint': checkpoint}
 
@@ -135,6 +136,7 @@ def main():
     p.add_argument('--gpu-model', choices=['3090', '4090'])
     p.add_argument('--start-task', type=int, default=0)
     p.add_argument('--task-count', type=int, default=10)
+    p.add_argument('--start-trial', type=int, default=0)
     p.add_argument('--trials', type=int, default=5)
     p.add_argument('--checkpoint-job-id')
     p.add_argument('--sft-steps', type=int, choices=FEWSHOT_SFT_STEPS, default=FEWSHOT_SFT_STEPS[0])
@@ -151,7 +153,7 @@ def main():
     initial_sft = None
     extra=[]
     if benchmark is not None:
-        extra = [str(a.start_task), str(a.task_count), str(a.trials)]
+        extra = [str(a.start_task), str(a.task_count), str(a.trials), str(a.start_trial)]
         if benchmark['checkpoint'] is not None:
             extra.append(benchmark['checkpoint'])
     if a.mode in CONVERSION_MODES:
@@ -180,7 +182,8 @@ def main():
         checkpoint = checked_sft_checkpoint(a, FEWSHOT_SFT_RUN, a.sft_steps)
         extra = [str(manifest), checkpoint]
     if a.mode in PT_RL_MODES:
-        checkpoint = checked_sft_checkpoint(a, FEWSHOT_SFT_RUN, a.sft_steps)
+        run = 'sft_source10' if a.mode in SOURCE_RL_MODES else FEWSHOT_SFT_RUN
+        checkpoint = checked_sft_checkpoint(a, run, a.sft_steps)
         initial_sft = {'checkpoint_job_id': a.checkpoint_job_id, 'checkpoint': checkpoint, 'sft_steps': a.sft_steps}
         extra = [checkpoint]
     import fcntl

@@ -24,7 +24,7 @@ class GpuBudgetTests(unittest.TestCase):
 class BenchmarkSubmissionTests(unittest.TestCase):
     def arguments(self, **overrides):
         values = {'mode': 'benchmark_libero', 'gpu_model': None, 'gpus': 1,
-                  'start_task': 0, 'task_count': 10, 'trials': 5,
+                  'start_task': 0, 'task_count': 10, 'start_trial': 0, 'trials': 5,
                   'checkpoint_job_id': None, 'sft_steps': 256, 'partition': 'GPU'}
         return SimpleNamespace(**(values | overrides))
 

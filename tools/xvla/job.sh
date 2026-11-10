@@ -63,11 +63,12 @@ case "$mode" in
      --checkpoint "${5:?SFT actor checkpoint directory}" ;;
  benchmark_libero|benchmark_pt|benchmark_sft_smoke|benchmark_sft_fewshot|benchmark_sft_source10)
    benchmark_model="${mode#benchmark_}"
-   benchmark_args=(--start-task "${4:?start task}" --task-count "${5:?task count}" --trials "${6:?trials}")
+   benchmark_args=(--start-task "${4:?start task}" --task-count "${5:?task count}" --trials "${6:?trials}"
+                   --start-trial "${7:?start trial}")
    if [[ "$mode" == benchmark_sft_source10 ]]; then benchmark_model=sft_fewshot; fi
    if [[ "$mode" == benchmark_sft_* ]]; then
      benchmark_model="${benchmark_model//_/-}"
-     benchmark_args+=(--checkpoint "${7:?SFT actor checkpoint directory}")
+     benchmark_args+=(--checkpoint "${8:?SFT actor checkpoint directory}")
    fi
    python -m xvla_rlinf.benchmark --model "$benchmark_model" "${benchmark_args[@]}" ;;
  convert|convert_fewshot|convert_source10)
@@ -117,6 +118,16 @@ PY
  ppo_pt|grpo_pt)
    export XVLA_INITIAL_SFT_CHECKPOINT="${4:?audited few-shot SFT actor checkpoint directory}"
    python -m xvla_rlinf.entry --config-name "${mode}_smoke" ;;
+ ppo_source10|grpo_source10)
+   export XVLA_INITIAL_SFT_CHECKPOINT="${4:?audited source-10 LoRA checkpoint}"
+   rl_mode="${mode%_source10}"
+   env_count=2
+   if [[ "$rl_mode" == grpo ]]; then env_count=4; fi
+   python -m xvla_rlinf.entry --config-name "${rl_mode}_pt_smoke" \
+     "runner.logger.experiment_name=$mode-smoke" actor.model.xvla.update_scope=lora_heads \
+     +actor.model.xvla.lora_rank=8 actor.model.xvla.position_std=0.003 \
+     actor.model.xvla.rotation_std=0.01 actor.model.xvla.gripper_logit_std=0.15 \
+     "env.train.total_num_envs=$env_count" "actor.global_batch_size=$((env_count * 10))" ;;
  sft) python -m xvla_rlinf.sft_entry --config-path "$repo/configs/xvla" --config-name sft_smoke ;;
  sft_fewshot|sft_source10|sft_source10_lora)
    sft_steps="${4:?bounded SFT step budget}"
@@ -139,7 +150,7 @@ PY
  *) exit 2 ;;
 esac
 case "$mode" in
- ppo|grpo|grpo_exploration|grpo_stress|sft|ppo_pt|grpo_pt)
+ ppo|grpo|grpo_exploration|grpo_stress|sft|ppo_pt|grpo_pt|ppo_source10|grpo_source10)
    python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$XVLA_RUN_DIR/${mode}-smoke/checkpoints/global_step_1/actor" ;;
  sft_fewshot)
    python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$XVLA_RUN_DIR/sft_fewshot-smoke/checkpoints/global_step_${sft_steps}/actor" ;;

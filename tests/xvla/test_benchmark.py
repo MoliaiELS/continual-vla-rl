@@ -26,6 +26,11 @@ class BenchmarkAccountingTests(unittest.TestCase):
         )
         self.assertEqual(len({row["policy_seed"] for row in full}), 50)
 
+    def test_trial_offset_preserves_the_initial_state_ids_and_seeds(self):
+        complete = build_trials(0, 1, 30)
+        extra = build_trials(0, 1, 20, start_trial=10)
+        self.assertEqual(extra, complete[10:])
+
     def test_reports_per_task_successes_and_executed_steps(self):
         plan = build_trials(2, 2, 2)
         episodes = [
@@ -54,6 +59,9 @@ class BenchmarkAccountingTests(unittest.TestCase):
         for args in ((-1, 1, 1), (9, 2, 1), (0, 10, 6), (0, 1, 0)):
             with self.subTest(args=args), self.assertRaises(ValueError):
                 build_trials(*args)
+        for start_trial in (-1, True, 1.5):
+            with self.subTest(start_trial=start_trial), self.assertRaises(ValueError):
+                build_trials(0, 1, 20, start_trial=start_trial)
 
 
 class BenchmarkSftLayoutTests(unittest.TestCase):
