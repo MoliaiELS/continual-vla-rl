@@ -87,7 +87,7 @@ class _CandidateSuite:
         return getattr(self.suite, name)
 
 
-def _run(audit, run_dir, report):
+def _run(audit, run_dir, report, checkpoint):
     from libero.libero import get_libero_path
     from libero.libero.envs.env_wrapper import ControlEnv
 
@@ -103,7 +103,8 @@ def _run(audit, run_dir, report):
     report["physics_accepted_trial_ids"] = [row["trial_id"] for row in plan]
     if not plan:
         raise RuntimeError("No source reset passed the physics screen")
-    model, report["checkpoint"] = _load_policy("libero", None)
+    model_name = "libero" if checkpoint is None else "sft-fewshot"
+    model, report["checkpoint"] = _load_policy(model_name, checkpoint)
     env, states, offsets = _make_environment(plan)
     try:
         task = env.task_suite.get_task(TASK_ID)
@@ -113,6 +114,18 @@ def _run(audit, run_dir, report):
                 or sha256_file(init_file) != audit["bundled_init_sha256"]):
             raise ValueError("Source assets do not match the physics audit")
 
+        if checkpoint is not None:
+            report["standard_episodes"] = []
+            with (run_dir / "source_reset_standard_episodes.jsonl").open("x", encoding="utf-8") as journal:
+                for row in plan:
+                    result = _run_episode(model, env, row, states, offsets)
+                    if result["initial_state_sha256"] != by_trial[row["trial_id"]]["initial_state_sha256"]:
+                        raise ValueError("Standard evaluation state differs from its physics receipt")
+                    line = json.dumps(result)
+                    journal.write(line + "\n")
+                    journal.flush()
+                    report["standard_episodes"].append(result)
+                    print("XVLA_SOURCE_RESET_STANDARD_EPISODE " + line, flush=True)
         states[TASK_ID] = np.array(states[TASK_ID], copy=True)
         control = ControlEnv(bddl_file_name=str(bddl), use_camera_obs=False, has_offscreen_renderer=False)
         try:
@@ -143,6 +156,7 @@ def _run(audit, run_dir, report):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--audit", type=Path, required=True)
+    parser.add_argument("--checkpoint", type=Path, help="Score an audited Pt-SFT candidate on the same source shifts")
     parser.add_argument("--output-dir", type=Path, default=os.environ.get("XVLA_RUN_DIR"))
     args = parser.parse_args(argv)
     if args.output_dir is None:
@@ -176,12 +190,12 @@ def main(argv=None):
                            "domain_id": DOMAIN, "chunk": CHUNK, "solver_steps": SOLVER_STEPS,
                            "horizon": HORIZON, "settling_steps": SETTLING}}
     try:
-        _run(audit, args.output_dir, report)
+        _run(audit, args.output_dir, report, args.checkpoint)
         report["solvable_trial_ids"] = [row["trial_id"] for row in report["episodes"] if row["success"]]
         report["policy_timeouts"] = [row["trial_id"] for row in report["episodes"] if not row["success"]]
         report["policy_env_steps"] = sum(row["policy_env_steps"] for row in report["episodes"])
         report["settling_env_steps"] = sum(row["settling_env_steps"] for row in report["episodes"])
-        report["status"] = "PASS" if report["solvable_trial_ids"] else "FAIL"
+        report["status"] = "PASS" if args.checkpoint is not None or report["solvable_trial_ids"] else "FAIL"
     except Exception as error:
         report.update(status="FAIL", error_type=type(error).__name__, error=str(error))
         _write_summary(output, report)

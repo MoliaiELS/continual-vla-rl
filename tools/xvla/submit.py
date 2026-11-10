@@ -21,12 +21,13 @@ SOURCE_DATASET = Path('datasets/source-spatial-task0-10')
 CONVERSION_MODES = ('convert', 'convert_fewshot', 'convert_source10')
 GPU_MODEL_MODES = (*BENCHMARK_MODELS, *PT_RL_MODES, 'convert_fewshot', 'sft_fewshot',
                    'replay_absolute', 'sft_action_check', 'convert_source10', 'sft_source10', 'sft_source10_lora',
-                   'source_reset_solvability')
+                   'source_reset_solvability', 'source_reset_sft')
 FEWSHOT_DATASET = Path('datasets/fewshot-spatial-task0-5')
 FEWSHOT_SFT_RUN = 'sft_fewshot-smoke'
 FEWSHOT_SFT_STEPS = (256, 1024)
 FEWSHOT_SFT_MODES = ('sft_fewshot', 'benchmark_sft_fewshot', 'sft_action_check', 'sft_source10',
-                     'sft_source10_lora', 'benchmark_sft_source10', 'benchmark_sft_sequence_dev', *PT_RL_MODES)
+                     'sft_source10_lora', 'benchmark_sft_source10', 'benchmark_sft_sequence_dev',
+                     'source_reset_sft', *PT_RL_MODES)
 
 def discover_task0_source(data_root: Path):
     """Read only our project's raw-data tree and pinned HF download receipt."""
@@ -62,7 +63,9 @@ def benchmark_settings(args):
     if model is None:
         if (args.start_task, args.task_count, args.start_trial, args.trials) != (0, 10, 0, 5):
             raise ValueError('Benchmark shard options require a benchmark mode')
-        if args.checkpoint_job_id is not None and args.mode not in (*PT_RL_MODES, 'sft_action_check', 'sft_source10_lora'):
+        if args.checkpoint_job_id is not None and args.mode not in (
+            *PT_RL_MODES, 'sft_action_check', 'sft_source10_lora', 'source_reset_sft'
+        ):
             raise ValueError('--checkpoint-job-id requires an SFT benchmark, warm-start, action check or Pt RL mode')
         return None
 
@@ -140,7 +143,7 @@ def require_fewshot_manifest(data, dataset=FEWSHOT_DATASET, demonstrations=5):
 def main():
     p=argparse.ArgumentParser();p.add_argument('--repo',type=Path,required=True);p.add_argument('--data',type=Path,required=True)
     p.add_argument('--mode', choices=[
-        'unit', 'imports', 'source_reset_audit', 'source_reset_solvability',
+        'unit', 'imports', 'source_reset_audit', 'source_reset_solvability', 'source_reset_sft',
         'alignment', 'native_eval', 'stochastic_eval', *CONVERSION_MODES,
         'sft', 'ppo', 'grpo', 'grpo_exploration', 'grpo_stress',
         'sft_fewshot', 'sft_source10', 'sft_source10_lora', 'replay_absolute', 'sft_action_check',
@@ -160,8 +163,8 @@ def main():
     p.add_argument('--convert-demonstrations',type=int,choices=[1,2])
     p.add_argument('--seed',type=int,default=1234)
     a=p.parse_args()
-    if (a.audit_job_id is not None) != (a.mode == 'source_reset_solvability'):
-        raise ValueError('--audit-job-id is required only for source reset solvability')
+    if (a.audit_job_id is not None) != (a.mode in ('source_reset_solvability', 'source_reset_sft')):
+        raise ValueError('--audit-job-id is required only for source reset evaluation')
     if (a.reset_pool is not None) != (a.mode == 'ppo_source10_pool'):
         raise ValueError('--reset-pool is required only for the source pool pilot')
     if a.mode == 'source_reset_audit' and a.gpus != 0:
@@ -203,13 +206,15 @@ def main():
         manifest = require_fewshot_manifest(a.data)
         checkpoint = checked_sft_checkpoint(a, FEWSHOT_SFT_RUN, a.sft_steps)
         extra = [str(manifest), checkpoint]
-    if a.mode == 'source_reset_solvability':
+    if a.mode in ('source_reset_solvability', 'source_reset_sft'):
         if not re.fullmatch('[0-9]+', a.audit_job_id):
             raise ValueError('Source reset solvability requires a numeric audit job ID')
         audit = a.data.resolve() / 'runs' / a.audit_job_id / 'source_reset_audit.json'
         if not audit.is_file():
             raise FileNotFoundError(audit)
         extra = [str(audit)]
+        if a.mode == 'source_reset_sft':
+            extra.append(checked_sft_checkpoint(a, 'sft_source10', a.sft_steps))
     if a.mode in PT_RL_MODES:
         run = 'sft_source10' if a.mode in SOURCE_RL_MODES else FEWSHOT_SFT_RUN
         checkpoint = checked_sft_checkpoint(a, run, a.sft_steps)

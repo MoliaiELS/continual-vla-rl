@@ -96,11 +96,12 @@ echo XVLA_DOWNLOAD_PID=`$!
   } elseif ($ResetPool) {
    throw '-ResetPool applies only to the source pool pilot'
   }
-  if ($Value -eq 'source_reset_solvability') {
-   if (-not $AuditJobId) { throw 'Source reset solvability requires -AuditJobId' }
+  $isSourceResetEval=$Value -in @('source_reset_solvability','source_reset_sft')
+  if ($isSourceResetEval) {
+   if (-not $AuditJobId) { throw 'Source reset evaluation requires -AuditJobId' }
    $submitOptions += " --audit-job-id $AuditJobId"
   } elseif ($AuditJobId) {
-   throw '-AuditJobId applies only to source reset solvability'
+   throw '-AuditJobId applies only to source reset evaluation'
   }
   if ($isBenchmark) {
    $submitOptions += " --start-task $StartTask --task-count $TaskCount --start-trial $StartTrial --trials $Trials"
@@ -108,18 +109,18 @@ echo XVLA_DOWNLOAD_PID=`$!
    throw 'Benchmark shard options require a benchmark mode'
   }
   $isSourceSft=$Value -in @('sft_source10','sft_source10_lora')
-  if ($isBenchmark -or $isSourceSft -or $isPtRl -or $Value -in @('convert_fewshot','sft_fewshot','replay_absolute','sft_action_check','convert_source10','source_reset_solvability')) {
+  if ($isBenchmark -or $isSourceSft -or $isPtRl -or $isSourceResetEval -or $Value -in @('convert_fewshot','sft_fewshot','replay_absolute','sft_action_check','convert_source10')) {
    $submitOptions += " --gpu-model $GpuModel"
   } elseif ($PSBoundParameters.ContainsKey('GpuModel')) {
    throw 'GPU model override applies only to benchmark and Pt few-shot pipeline modes'
   }
-  if ($isPtRl -or $isSequenceDev -or $Value -in @('benchmark_sft_smoke','benchmark_sft_fewshot','benchmark_sft_source10','benchmark_rl_source10','sft_source10_lora','sft_action_check')) {
+  if ($isPtRl -or $isSequenceDev -or $Value -in @('benchmark_sft_smoke','benchmark_sft_fewshot','benchmark_sft_source10','benchmark_rl_source10','sft_source10_lora','sft_action_check','source_reset_sft')) {
    if (-not $CheckpointJobId) { throw "$Value requires -CheckpointJobId" }
    $submitOptions += " --checkpoint-job-id $CheckpointJobId"
   } elseif ($CheckpointJobId) {
    throw 'Checkpoint job ID requires an SFT benchmark or Pt RL mode'
   }
-  if ($isSourceSft -or $isPtRl -or $Value -in @('sft_fewshot','benchmark_sft_fewshot','sft_action_check','benchmark_sft_source10','benchmark_sft_sequence_dev')) {
+  if ($isSourceSft -or $isPtRl -or $Value -in @('sft_fewshot','benchmark_sft_fewshot','sft_action_check','benchmark_sft_source10','benchmark_sft_sequence_dev','source_reset_sft')) {
    $submitOptions += " --sft-steps $SftSteps"
   } elseif ($PSBoundParameters.ContainsKey('SftSteps')) {
    throw 'SFT steps apply only to few-shot SFT and its consumers'

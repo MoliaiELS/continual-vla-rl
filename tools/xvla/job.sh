@@ -56,6 +56,9 @@ case "$mode" in
    python -m xvla_rlinf.source_reset_audit --start-trial 30 --trials 10 --along-offset-m 0.01 ;;
  source_reset_solvability)
    python -m xvla_rlinf.source_reset_solvability --audit "${4:?physics audit report}" ;;
+ source_reset_sft)
+   python -m xvla_rlinf.source_reset_solvability --audit "${4:?physics audit report}" \
+     --checkpoint "${5:?audited Pt-SFT checkpoint}" ;;
  alignment) python -m xvla_rlinf.smoke alignment ;;
  native_eval) python -m xvla_rlinf.entry --config-name native_eval_smoke ;;
  stochastic_eval) python -m xvla_rlinf.entry --config-name stochastic_eval_smoke ;;
