@@ -25,6 +25,7 @@ MODEL_REVISIONS = {
     "pt": ("2toINF/X-VLA-Pt", "c1c4a64a7e03ac5b95c468bf1578f3d03651b53b"),
 }
 TRIAL_FIELDS = ("task_id", "trial_id", "environment_seed", "policy_seed")
+SFT_MODELS = ("sft-smoke", "sft-fewshot")
 
 
 def build_trials(start_task: int, task_count: int, trials: int) -> list[dict]:
@@ -85,7 +86,7 @@ def _load_policy(model_name, checkpoint):
     from omegaconf import OmegaConf
     from .policy import XVLAPolicy
 
-    is_sft = model_name == "sft-smoke"
+    is_sft = model_name in SFT_MODELS
     base = "pt" if is_sft else model_name
     model_path = Path(os.environ["XVLA_PT_MODEL_PATH" if base == "pt" else "XVLA_MODEL_PATH"]).resolve()
     repo_id, revision = MODEL_REVISIONS[base]
@@ -227,14 +228,14 @@ def _write_summary(path, record):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", choices=["libero", "pt", "sft-smoke"], required=True)
+    parser.add_argument("--model", choices=("libero", "pt", *SFT_MODELS), required=True)
     parser.add_argument("--start-task", type=int, default=0)
     parser.add_argument("--task-count", type=int, default=10)
     parser.add_argument("--trials", type=int, default=5)
     parser.add_argument("--checkpoint", type=Path, help="Audited SFT actor checkpoint directory")
     args = parser.parse_args(argv)
-    if (args.checkpoint is not None) != (args.model == "sft-smoke"):
-        parser.error("--model sft-smoke requires --checkpoint, which applies only to that model")
+    if (args.checkpoint is not None) != (args.model in SFT_MODELS):
+        parser.error("--checkpoint is required for SFT models and applies only to them")
     try:
         plan = build_trials(args.start_task, args.task_count, args.trials)
     except ValueError as error:

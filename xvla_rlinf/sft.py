@@ -186,7 +186,8 @@ def convert_demonstrations(
     manifest["demonstrations"] = len(manifest["episodes"])
     manifest["training_frames_before_static_filter"] = sum(ep["frames"] for ep in manifest["episodes"])
     target_manifest = output_dir / "manifest.json"
-    target_manifest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    with target_manifest.open("x", encoding="utf-8") as stream:
+        stream.write(json.dumps(manifest, indent=2) + "\n")
     return target_manifest
 
 
@@ -346,6 +347,14 @@ def build_xvla_sft_dataloader(cfg, world_size: int, rank: int, data_paths, eval_
         raise ValueError("Controlled finite-demo SFT must initialize from the fixed X-VLA-Pt checkpoint")
     model_cfg = json.loads((model_path / "config.json").read_text())
     dataset = ConvertedLiberoDataset(data_paths, horizon=int(model_cfg["num_actions"]))
+    requirements = cfg.data.get("manifest_requirements")
+    if requirements is not None:
+        episodes = dataset.manifest["episodes"]
+        if (len(episodes) != requirements.demonstrations
+                or dataset.manifest.get("selection_seed") != requirements.selection_seed
+                or any((episode["task_suite"], episode["task_id"])
+                       != (requirements.task_suite, requirements.task_id) for episode in episodes)):
+            raise ValueError("SFT manifest does not match the required demonstration count, task, or selection seed")
     processor = XVLAProcessor.from_pretrained(str(model_path), trust_remote_code=False, local_files_only=True)
     seed = int(cfg.actor.seed)
     sampler = EpochCursorSampler(DistributedSampler(
@@ -364,6 +373,20 @@ def build_xvla_sft_dataloader(cfg, world_size: int, rank: int, data_paths, eval_
               "usable_windows": len(dataset), "seed": seed, "rank": rank, "world_size": world_size,
               "prediction_horizon": dataset.horizon, "source_frequency": 30.0,
               "query_duration": 1.0, "transform": "official_resize224_bicubic_colorjitter_imagenet"}
+    if requirements is not None:
+        from omegaconf import OmegaConf
+
+        config["demo_ids"] = [episode["demo_id"] for episode in episodes]
+        config["selection_seed"] = dataset.manifest["selection_seed"]
+        config["optimization"] = {
+            "optimizer": "AdamW",
+            "parameters": OmegaConf.to_container(cfg.actor.optim, resolve=True),
+            "micro_batch_size": batch,
+            "global_batch_size": int(cfg.actor.global_batch_size),
+            "max_steps": int(cfg.runner.max_steps),
+            "max_epochs": int(cfg.runner.max_epochs),
+            "save_interval": int(cfg.runner.save_interval),
+        }
     print("XVLA_SFT_DATA " + json.dumps(config), flush=True)
     return loader, config
 
@@ -387,6 +410,19 @@ def main():
     if args.command == "convert":
         if not os.environ.get("SLURM_JOB_ID"):
             parser.error("Controller replay is simulation: submit through this project's Slurm launcher")
+        if os.environ.get("RLINF_XVLA_ISOLATED_RAY") == "1":
+            mask = os.environ.get("CUDA_VISIBLE_DEVICES")
+            if not mask or mask != os.environ.get("RLINF_XVLA_ALLOCATION_CUDA_VISIBLE_DEVICES"):
+                raise RuntimeError("Controller replay requires the unchanged Slurm CUDA visibility mask")
+            if os.environ.get("MUJOCO_GL") != "egl" or os.environ.get("PYOPENGL_PLATFORM") != "egl":
+                raise RuntimeError("Controller replay requires the launcher EGL backend")
+            from rlinf.scheduler.hardware.accelerators.nvidia_gpu import NvidiaGPUManager
+
+            egl_id = NvidiaGPUManager.get_egl_device_id(0)
+            if egl_id is None:
+                raise RuntimeError("Cannot verify an EGL device for Slurm CUDA ordinal 0")
+            os.environ["MUJOCO_EGL_DEVICE_ID"] = os.environ["EGL_DEVICE_ID"] = str(egl_id)
+            print(f"XVLA_SFT_EGL cuda_ordinal=0 egl_device_id={egl_id}", flush=True)
         manifest = convert_demonstrations(args.source_hdf5, args.output_dir, task_suite=args.task_suite,
                                          task_id=args.task_id, data_revision=args.data_revision,
                                          demonstrations=args.demonstrations, seed=args.seed,

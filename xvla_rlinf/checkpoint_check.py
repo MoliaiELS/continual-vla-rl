@@ -106,6 +106,9 @@ def check_checkpoint(checkpoint_dir: Path) -> dict[str, Any]:
     config = OmegaConf.create(evidence["model_config"])
     if OmegaConf.to_container(config, resolve=True) != evidence["model_config"]:
         raise ValueError("model_config must already be resolved; do not reinterpret saved interpolation")
+    if config.get("xvla", {}).get("initial_sft_checkpoint") is not None:
+        # Rebuild the architecture, then verify the complete RL export directly.
+        config.xvla.initial_sft_checkpoint = None
     model = get_model(config)
     if model is None:
         raise RuntimeError("The RLINF_EXT_MODULE hook did not register an X-VLA model builder")

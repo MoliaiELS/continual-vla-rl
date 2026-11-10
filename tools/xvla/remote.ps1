@@ -82,17 +82,28 @@ echo XVLA_DOWNLOAD_PID=`$!
  }
  'submit' {
   if ($Value -notmatch '^[a-z0-9_-]+$' -or $Gpus -notin @(0,1,2)) { throw 'Invalid X-VLA mode or GPU count' }
-  $benchmarkOptions=''
-  if ($Value -in @('benchmark_libero','benchmark_pt','benchmark_sft_smoke')) {
-   $benchmarkOptions=" --gpu-model $GpuModel --start-task $StartTask --task-count $TaskCount --trials $Trials"
-   if ($CheckpointJobId) { $benchmarkOptions += " --checkpoint-job-id $CheckpointJobId" }
-  } elseif ($PSBoundParameters.ContainsKey('GpuModel') -or $CheckpointJobId -or $StartTask -ne 0 -or $TaskCount -ne 10 -or $Trials -ne 5) {
-   throw 'GPU model and benchmark options require a benchmark mode'
+  $submitOptions=''
+  $isBenchmark=$Value -in @('benchmark_libero','benchmark_pt','benchmark_sft_smoke','benchmark_sft_fewshot')
+  if ($isBenchmark) {
+   $submitOptions += " --start-task $StartTask --task-count $TaskCount --trials $Trials"
+  } elseif ($StartTask -ne 0 -or $TaskCount -ne 10 -or $Trials -ne 5) {
+   throw 'Benchmark shard options require a benchmark mode'
+  }
+  if ($isBenchmark -or $Value -in @('convert_fewshot','sft_fewshot')) {
+   $submitOptions += " --gpu-model $GpuModel"
+  } elseif ($PSBoundParameters.ContainsKey('GpuModel')) {
+   throw 'GPU model override applies only to benchmark and few-shot data/SFT modes'
+  }
+  if ($Value -in @('benchmark_sft_smoke','benchmark_sft_fewshot','ppo_pt','grpo_pt')) {
+   if (-not $CheckpointJobId) { throw "$Value requires -CheckpointJobId" }
+   $submitOptions += " --checkpoint-job-id $CheckpointJobId"
+  } elseif ($CheckpointJobId) {
+   throw 'Checkpoint job ID requires an SFT benchmark or Pt RL mode'
   }
   Invoke-XRemote @"
 test -f '$snapshot/tools/xvla/job.sh'
 mkdir -p '$data/logs'
-'$($settings.CondaRoot)/envs/vla_budget_rl/bin/python' '$snapshot/tools/xvla/submit.py' --repo '$snapshot' --data '$data' --mode '$Value' --gpus $Gpus --partition '$($settings.Partition)'$benchmarkOptions
+'$($settings.CondaRoot)/envs/vla_budget_rl/bin/python' '$snapshot/tools/xvla/submit.py' --repo '$snapshot' --data '$data' --mode '$Value' --gpus $Gpus --partition '$($settings.Partition)'$submitOptions
 "@
  }
  'status' {

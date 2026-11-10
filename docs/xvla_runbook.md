@@ -159,3 +159,20 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\xvla\remote.ps1 
 ```
 
 每个作业在 `runs/<job>/benchmark_episodes.jsonl` 逐回合写入身份、成功标记及实际步数。 `benchmark_summary.json` 在全部预定回合完成后写入，包含各任务成功次数、回合数和任务等权平均。可通过 `-StartTask`、`-TaskCount` 拆分任务，保持各权重的 `-Trials` 相同。用 `benchmark_sft_smoke -CheckpointJobId 19407` 验证单步 SFT 导出的评估路径。
+
+### Pt → 五条示教 SFT → 在线更新
+
+首轮固定 LIBERO-Spatial 任务0、示教抽样 seed1234、5条独立成功示教、prompt/action heads 的 domain3 参数和256次 SFT 更新。转换时逐条重放并保存 controller 的绝对目标。转换通过后才发布 `datasets/fewshot-spatial-task0-5/manifest.json`。
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\xvla\remote.ps1 submit convert_fewshot -GpuModel 3090
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\xvla\remote.ps1 submit sft_fewshot -GpuModel 3090
+
+# 替换为完成 256 步并通过独立重载的 SFT 作业 ID。
+$sftJob = '替换为作业号'
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\xvla\remote.ps1 submit benchmark_sft_fewshot -GpuModel 3090 -TaskCount 1 -CheckpointJobId $sftJob
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\xvla\remote.ps1 submit ppo_pt -CheckpointJobId $sftJob
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\xvla\remote.ps1 submit grpo_pt -CheckpointJobId $sftJob
+```
+
+先完成任务0的原生评估，检查5个配对初态、成功回合和完成步数，再核对任务0初态0的在线采样。PPO 和 GRPO 从同一个审计过的 SFT 导出加载策略张量，PPO 额外初始化观测价值头。每个算法以一次真实更新为验收目标，记录实际奖励、梯度、参数变化、同步、更新后 rollout 与 checkpoint 重载。PPO 需要观测到正奖励，GRPO 需要组内奖励方差。原生评估的800步上限与在线训练的300步上限分别记录。

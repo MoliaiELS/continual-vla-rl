@@ -161,6 +161,15 @@ class XVLASftWorker(FSDPVlaSftWorker):
         self._save_resume_counters(save_path)
         if self._xvla_audit:
             expected=self._model_fingerprints()
+            if self.cfg.data.get("manifest_requirements") is not None:
+                changed = [name for name, initial in self._xvla_initial.items()
+                           if expected[name]["sha256"] != initial["sha256"]]
+                trainable = [name for name in changed if self._xvla_initial[name]["trainable"]]
+                frozen = [name for name in changed if not self._xvla_initial[name]["trainable"]]
+                self._audit_write("final_optimizer_audit", optimizer_steps=self.optimizer_steps,
+                                  changed_trainable=trainable, changed_frozen=frozen)
+                if not trainable or frozen:
+                    raise RuntimeError("Final SFT state did not preserve the frozen parameter contract")
             # A deliberate temporary perturbation proves load really restores a
             # weight rather than comparing an unchanged model to itself.
             with torch.no_grad():

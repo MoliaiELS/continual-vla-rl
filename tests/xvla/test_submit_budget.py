@@ -54,6 +54,56 @@ class BenchmarkSubmissionTests(unittest.TestCase):
             self.assertEqual(Path(settings['checkpoint']), checkpoint.resolve())
             self.assertEqual(settings['model'], 'sft-smoke')
 
+    def test_fewshot_conversion_is_fixed_and_preserves_existing_destination(self):
+        with TemporaryDirectory() as directory:
+            data = Path(directory)
+            args = self.arguments(mode='convert_fewshot', gpu_model='3090', data=data,
+                                  convert_output=None, convert_demonstrations=None, seed=1234)
+            self.assertIsNone(submit.benchmark_settings(args))
+            with patch.dict(submit.os.environ, {'FYP_DATA_ROOT': directory}):
+                with patch.object(submit, 'discover_task0_source', return_value={}):
+                    conversion = submit.conversion_settings(args)
+                    expected = data.resolve() / submit.FEWSHOT_DATASET
+                    self.assertEqual(Path(conversion['output_dir']), expected)
+                    self.assertEqual(conversion['requested_demonstrations'], 5)
+                    self.assertEqual(conversion['selection_seed'], 1234)
+                    expected.mkdir(parents=True)
+                    with self.assertRaises(FileExistsError):
+                        submit.conversion_settings(args)
+
+    def test_fewshot_manifest_and_checkpoint_are_separate_from_one_step_smoke(self):
+        with TemporaryDirectory() as directory:
+            data = Path(directory)
+            manifest = data / submit.FEWSHOT_DATASET / 'manifest.json'
+            manifest.parent.mkdir(parents=True)
+            contents = {'requested_demonstrations': 5, 'demonstrations': 5,
+                        'selection_seed': 1234, 'episodes': [
+                            {'task_suite': 'libero_spatial', 'task_id': 0, 'demo_id': str(index),
+                             'success_final': True, 'controller_replay_verified': True}
+                            for index in range(5)
+                        ]}
+            manifest.write_text(json.dumps(contents), encoding='utf-8')
+            submit.require_fewshot_manifest(data)
+            contents['episodes'].pop()
+            manifest.write_text(json.dumps(contents), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'five verified task-0'):
+                submit.require_fewshot_manifest(data)
+
+            checkpoint = data / 'runs/12345/sft_fewshot-smoke/checkpoints/global_step_256/actor'
+            checkpoint.mkdir(parents=True)
+            (checkpoint / 'checkpoint_check.json').write_text('{"status":"PASS"}', encoding='utf-8')
+            args = self.arguments(mode='benchmark_sft_fewshot', data=data, checkpoint_job_id='12345')
+            settings = submit.benchmark_settings(args)
+            self.assertEqual(settings['model'], 'sft-fewshot')
+            self.assertEqual(Path(settings['checkpoint']), checkpoint.resolve())
+            args.mode = 'benchmark_sft_smoke'
+            with self.assertRaisesRegex(ValueError, 'independent load PASS'):
+                submit.benchmark_settings(args)
+            args.mode = 'ppo_pt'
+            self.assertIsNone(submit.benchmark_settings(args))
+            self.assertEqual(Path(submit.checked_sft_checkpoint(args, submit.FEWSHOT_SFT_RUN, 256)),
+                             checkpoint.resolve())
+
     def test_benchmark_gpu_type_does_not_bypass_budget(self):
         with patch.dict(submit.os.environ, {'USER': 'benchmark-test'}):
             with patch.object(submit.subprocess, 'check_output', side_effect=[

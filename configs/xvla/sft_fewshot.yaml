@@ -1,0 +1,72 @@
+defaults:
+  - _sft_base
+  - _self_
+hydra:
+  searchpath:
+    - file://${oc.env:RLINF_RUNTIME}/examples/sft/config
+    - file://${oc.env:RLINF_RUNTIME}/examples/embodiment/config
+  run:
+    dir: .
+  output_subdir: null
+cluster:
+  num_nodes: 1
+  component_placement:
+    actor,env,rollout: all
+runner:
+  task_type: sft
+  max_steps: 256
+  max_epochs: 256 # A nonempty loader can always reach the step limit.
+  save_interval: 256
+  val_check_interval: -1
+  logger:
+    log_path: ${oc.env:XVLA_RUN_DIR}
+    project_name: fyp-xvla
+    experiment_name: sft_fewshot-smoke
+    logger_backends: [tensorboard]
+data:
+  train_data_paths: ${oc.env:FYP_XVLA_DATA}/datasets/fewshot-spatial-task0-5/manifest.json
+  manifest_requirements:
+    demonstrations: 5
+    selection_seed: 1234
+    task_suite: libero_spatial
+    task_id: 0
+  num_workers: 0
+actor:
+  micro_batch_size: 1
+  global_batch_size: 1
+  seed: 1234
+  model:
+    model_type: xvla
+    model_path: ${oc.env:XVLA_PT_MODEL_PATH}
+    precision: fp32
+    is_lora: false
+    num_action_chunks: 30
+    action_dim: 7
+    add_value_head: false
+    xvla:
+      update_scope: prompt_heads
+      domain_rows: [3]
+      steps: 10
+      domain_id: 3
+  optim:
+    lr: 1.0e-4
+    weight_decay: 0.0
+    lr_scheduler: constant
+    lr_warmup_steps: 0
+    total_training_steps: 256
+  fsdp_config:
+    strategy: fsdp
+    sharding_strategy: no_shard
+    disable: true # disable automatic child wrapping, keep the FSDP root
+    xvla_ignore_frozen_parameters: true
+    wrap_policy:
+      transformer_layer_cls_to_wrap: []
+      module_classes_to_wrap: []
+      no_split_names: []
+    use_orig_params: true
+    gradient_checkpointing: false
+    use_liger_kernel: false
+    mixed_precision:
+      param_dtype: fp32
+      reduce_dtype: fp32
+      buffer_dtype: fp32

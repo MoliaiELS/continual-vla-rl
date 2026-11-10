@@ -1,0 +1,28 @@
+defaults:
+  - _embodied_base
+  - _ppo_overrides
+  - _pt_smoke_overrides
+  - _self_
+hydra:
+  searchpath:
+    - file://${oc.env:RLINF_RUNTIME}/examples/embodiment/config
+  run:
+    dir: .
+  output_subdir: null
+runner:
+  logger:
+    experiment_name: grpo_pt-smoke
+algorithm:
+  adv_type: grpo
+  loss_type: actor
+  group_size: 4
+  filter_rewards: true
+  rewards_lower_bound: 0.01
+  rewards_upper_bound: 0.99
+  log_group_success_metrics: true
+env:
+  train:
+    group_size: 4
+actor:
+  model:
+    add_value_head: false

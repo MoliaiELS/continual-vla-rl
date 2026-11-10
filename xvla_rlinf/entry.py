@@ -19,6 +19,8 @@ def main(cfg):
     from rlinf.workers.env.env_worker import EnvWorker
     from .audit_workers import AuditedRollout
     cfg=validate_cfg(cfg)
+    from .rl_initialization import validate_rl_initialization
+    validate_rl_initialization(cfg)
     print(OmegaConf.to_yaml(cfg,resolve=True),flush=True)
     cluster=Cluster(cluster_cfg=cfg.cluster)
     placement=HybridComponentPlacement(cfg,cluster)

@@ -13,4 +13,8 @@ def build_model(cfg, torch_dtype):
     from .policy import XVLAPolicy
     if cfg.get('is_lora', False):
         raise ValueError('Use xvla.update_scope; RLinf factory LoRA injection must be disabled')
-    return XVLAPolicy.from_checkpoint(cfg, torch_dtype)
+    model = XVLAPolicy.from_checkpoint(cfg, torch_dtype)
+    if cfg.get('xvla', {}).get('initial_sft_checkpoint') is not None:
+        from .rl_initialization import initialize_from_sft
+        initialize_from_sft(model, cfg)
+    return model

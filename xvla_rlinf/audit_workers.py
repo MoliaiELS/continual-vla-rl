@@ -5,6 +5,7 @@ algorithm to RLinf; they do not introduce another optimization loop.
 """
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import time
@@ -83,6 +84,13 @@ class AuditedActor(EmbodiedFSDPActor):
                gradients=gradients, actor_transformer_gradient_norms=actor_norms,
                parameter_max_changes=changes, peak_cuda_allocated=torch.cuda.max_memory_allocated(),
                critic_warmup_steps=self.critic_warmup_steps)
+        if self.cfg.algorithm.get("xvla_require_actor_update", False):
+            if any(not math.isfinite(value) for value in (*gradients.values(), *changes.values())
+                   if value is not None):
+                raise RuntimeError("Non-finite gradient or parameter update")
+            if not any(norm is not None and norm > 0 and changes[name] > 0
+                       for name, norm in actor_norms.items()):
+                raise RuntimeError("No nonzero action-transformer gradient and parameter update")
         return result
 
     def run_training(self):
@@ -96,6 +104,10 @@ class AuditedActor(EmbodiedFSDPActor):
                                   max=float(value.max()), sum=float(value.sum()),
                                   std=float(value.std(unbiased=False)))
         record('training_batch', rank=self._rank, stats=stats)
+        if self.cfg.algorithm.get("xvla_require_positive_reward", False):
+            rewards = batch["rewards"]
+            if not bool(torch.isfinite(rewards).all()) or not bool((rewards > 0).any()):
+                raise RuntimeError("NO_POSITIVE_PPO_REWARD: no successful rollout for the Pt-SFT PPO update")
         if self.cfg.algorithm.adv_type=='grpo':
             rewards=batch['rewards'].float().sum(dim=(0,2)).reshape(-1,self.cfg.algorithm.group_size)
             variances=rewards.var(dim=1,unbiased=False)

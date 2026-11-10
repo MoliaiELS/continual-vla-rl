@@ -7,7 +7,13 @@ BENCHMARK_MODELS = {
     'benchmark_libero': 'libero',
     'benchmark_pt': 'pt',
     'benchmark_sft_smoke': 'sft-smoke',
+    'benchmark_sft_fewshot': 'sft-fewshot',
 }
+PT_RL_MODES = ('ppo_pt', 'grpo_pt')
+GPU_MODEL_MODES = (*BENCHMARK_MODELS, 'convert_fewshot', 'sft_fewshot')
+FEWSHOT_DATASET = Path('datasets/fewshot-spatial-task0-5')
+FEWSHOT_SFT_RUN = 'sft_fewshot-smoke'
+FEWSHOT_SFT_STEP = 256
 
 def discover_task0_source(data_root: Path):
     """Read only our project's raw-data tree and pinned HF download receipt."""
@@ -25,12 +31,26 @@ def discover_task0_source(data_root: Path):
             'download_receipt':str(metadata)}
 
 
+def checked_sft_checkpoint(args, run_name, step):
+    if not re.fullmatch('[0-9]+', args.checkpoint_job_id or ''):
+        raise ValueError(f'{args.mode} requires a numeric --checkpoint-job-id')
+    checkpoint = (args.data.resolve() / 'runs' / args.checkpoint_job_id / run_name
+                  / 'checkpoints' / f'global_step_{step}' / 'actor')
+    report = checkpoint / 'checkpoint_check.json'
+    if not report.is_file() or json.loads(report.read_text(encoding='utf-8')).get('status') != 'PASS':
+        raise ValueError(f'SFT checkpoint requires an independent load PASS: {report}')
+    return str(checkpoint)
+
+
 def benchmark_settings(args):
+    if args.gpu_model is not None and args.mode not in GPU_MODEL_MODES:
+        raise ValueError('--gpu-model applies only to benchmark and few-shot data/SFT modes')
     model = BENCHMARK_MODELS.get(args.mode)
     if model is None:
-        if (args.gpu_model is not None or args.checkpoint_job_id is not None
-                or (args.start_task, args.task_count, args.trials) != (0, 10, 5)):
-            raise ValueError('GPU model and benchmark options require a benchmark mode')
+        if (args.start_task, args.task_count, args.trials) != (0, 10, 5):
+            raise ValueError('Benchmark shard options require a benchmark mode')
+        if args.checkpoint_job_id is not None and args.mode not in PT_RL_MODES:
+            raise ValueError('--checkpoint-job-id requires SFT benchmark or Pt RL mode')
         return None
 
     if not 0 <= args.start_task < args.start_task + args.task_count <= 10:
@@ -40,24 +60,59 @@ def benchmark_settings(args):
 
     checkpoint = None
     if model == 'sft-smoke':
-        if not re.fullmatch('[0-9]+', args.checkpoint_job_id or ''):
-            raise ValueError('benchmark_sft_smoke requires a numeric --checkpoint-job-id')
-        checkpoint = (args.data.resolve() / 'runs' / args.checkpoint_job_id / 'sft-smoke'
-                      / 'checkpoints' / 'global_step_1' / 'actor')
-        report = checkpoint / 'checkpoint_check.json'
-        if not report.is_file() or json.loads(report.read_text(encoding='utf-8')).get('status') != 'PASS':
-            raise ValueError(f'SFT checkpoint requires an independent load PASS: {report}')
+        checkpoint = checked_sft_checkpoint(args, 'sft-smoke', 1)
+    elif model == 'sft-fewshot':
+        checkpoint = checked_sft_checkpoint(args, FEWSHOT_SFT_RUN, FEWSHOT_SFT_STEP)
     elif args.checkpoint_job_id is not None:
-        raise ValueError('--checkpoint-job-id applies only to benchmark_sft_smoke')
+        raise ValueError('--checkpoint-job-id applies only to SFT benchmarks and Pt RL')
 
     return {'model': model, 'start_task': args.start_task, 'task_count': args.task_count,
             'trials': args.trials, 'checkpoint_job_id': args.checkpoint_job_id,
-            'checkpoint': str(checkpoint) if checkpoint is not None else None}
+            'checkpoint': checkpoint}
+
+
+def conversion_settings(args):
+    fewshot = args.mode == 'convert_fewshot'
+    if fewshot and (args.convert_output is not None or args.convert_demonstrations is not None or args.seed != 1234):
+        raise ValueError('convert_fewshot fixes the destination, five demonstrations, and seed 1234')
+    if not os.environ.get('FYP_DATA_ROOT'):
+        raise RuntimeError('FYP_DATA_ROOT must be supplied from current project settings')
+    if fewshot:
+        output = args.data.resolve() / FEWSHOT_DATASET
+        demonstrations = 5
+        if output.exists() or output.is_symlink():
+            raise FileExistsError(f'Few-shot destination already exists: {output}; inspect/reuse it')
+    else:
+        output = (args.convert_output or args.data / 'datasets/limited-spatial-task0').resolve()
+        demonstrations = args.convert_demonstrations or 1
+        if (output / 'manifest.json').exists():
+            raise FileExistsError(f'Converted manifest already exists: {output}/manifest.json; inspect/reuse it')
+    conversion = discover_task0_source(Path(os.environ['FYP_DATA_ROOT']))
+    conversion.update(output_dir=str(output), selection_seed=args.seed,
+                      requested_demonstrations=demonstrations)
+    return conversion
+
+
+def require_fewshot_manifest(data):
+    path = data.resolve() / FEWSHOT_DATASET / 'manifest.json'
+    manifest = json.loads(path.read_text(encoding='utf-8'))
+    episodes = manifest.get('episodes', [])
+    if (manifest.get('requested_demonstrations') != 5 or manifest.get('demonstrations') != 5
+            or manifest.get('selection_seed') != 1234 or len(episodes) != 5
+            or len({episode['demo_id'] for episode in episodes}) != 5
+            or any(episode['task_suite'] != 'libero_spatial' or episode['task_id'] != 0
+                   or not episode.get('success_final') or not episode.get('controller_replay_verified')
+                   for episode in episodes)):
+        raise ValueError(f'Expected five verified task-0 demonstrations selected with seed 1234: {path}')
 
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--repo',type=Path,required=True);p.add_argument('--data',type=Path,required=True)
-    p.add_argument('--mode',choices=['unit','imports','alignment','native_eval','stochastic_eval','convert','sft','ppo','grpo','grpo_exploration','grpo_stress',*BENCHMARK_MODELS],required=True)
+    p.add_argument('--mode', choices=[
+        'unit', 'imports', 'alignment', 'native_eval', 'stochastic_eval', 'convert',
+        'sft', 'ppo', 'grpo', 'grpo_exploration', 'grpo_stress', 'convert_fewshot',
+        'sft_fewshot', *PT_RL_MODES, *BENCHMARK_MODELS,
+    ], required=True)
     p.add_argument('--gpus',type=int,choices=[0,1,2],required=True);p.add_argument('--partition',required=True)
     p.add_argument('--gpu-model', choices=['3090', '4090'])
     p.add_argument('--start-task', type=int, default=0)
@@ -65,35 +120,36 @@ def main():
     p.add_argument('--trials', type=int, default=5)
     p.add_argument('--checkpoint-job-id')
     p.add_argument('--convert-output',type=Path)
-    p.add_argument('--convert-demonstrations',type=int,choices=[1,2],default=1)
+    p.add_argument('--convert-demonstrations',type=int,choices=[1,2])
     p.add_argument('--seed',type=int,default=1234)
     a=p.parse_args()
     if a.mode not in ('unit','imports') and a.gpus!=1:
         raise ValueError('Model, simulation and online audit modes require exactly one GPU')
     benchmark = benchmark_settings(a)
     conversion=None
+    initial_sft = None
     extra=[]
     if benchmark is not None:
         extra = [str(a.start_task), str(a.task_count), str(a.trials)]
         if benchmark['checkpoint'] is not None:
             extra.append(benchmark['checkpoint'])
-    if a.mode=='convert':
-        if a.gpus!=1:raise ValueError('Controller replay smoke requests exactly one GPU')
-        if not os.environ.get('FYP_DATA_ROOT'):
-            raise RuntimeError('FYP_DATA_ROOT must be supplied from current project settings')
-        conversion=discover_task0_source(Path(os.environ['FYP_DATA_ROOT']))
-        output=(a.convert_output or a.data/'datasets/limited-spatial-task0').resolve()
-        if (output/'manifest.json').exists():
-            raise FileExistsError(f'Converted manifest already exists: {output}/manifest.json; inspect/reuse it')
-        conversion.update(output_dir=str(output),selection_seed=a.seed,
-                          requested_demonstrations=a.convert_demonstrations)
-        extra=[conversion['source_hdf5'],str(output),conversion['data_revision'],
-               conversion['source_sha256'],str(a.seed),str(a.convert_demonstrations)]
+    if a.mode in ('convert', 'convert_fewshot'):
+        conversion = conversion_settings(a)
+        extra = [str(conversion[key]) for key in (
+            'source_hdf5', 'output_dir', 'data_revision', 'source_sha256',
+            'selection_seed', 'requested_demonstrations',
+        )]
+    if a.mode == 'sft_fewshot':
+        require_fewshot_manifest(a.data)
+    if a.mode in PT_RL_MODES:
+        checkpoint = checked_sft_checkpoint(a, FEWSHOT_SFT_RUN, FEWSHOT_SFT_STEP)
+        initial_sft = {'checkpoint_job_id': a.checkpoint_job_id, 'checkpoint': checkpoint}
+        extra = [checkpoint]
     import fcntl
     a.data.mkdir(parents=True,exist_ok=True)
     with (a.data/'submit.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
-        submit_locked(a,conversion,extra,benchmark)
+        submit_locked(a,conversion,extra,benchmark,initial_sft)
 
 
 def gpu_commitment(info):
@@ -109,7 +165,7 @@ def gpu_commitment(info):
     return max(totals,default=0)
 
 
-def submit_locked(a,conversion,extra,benchmark=None):
+def submit_locked(a,conversion,extra,benchmark=None,initial_sft=None):
     allocated=0
     # squeue's active set includes pending reservations as well as running jobs.
     ids=subprocess.check_output(['squeue','-h','-u',os.environ['USER'],'-o','%i'],text=True).split()
@@ -130,6 +186,8 @@ def submit_locked(a,conversion,extra,benchmark=None):
     record={'job_id':result,'mode':a.mode,'requested_gpus':a.gpus,'own_preexisting_gpus':allocated,
             'command':cmd,'conversion':conversion,'benchmark':benchmark,
             'requested_gpu_model':gpu_model if a.gpus else None}
+    if initial_sft is not None:
+        record['initial_sft'] = initial_sft
     receipt=a.data/'runs'/('submission-'+result.split(';')[0]+'.json')
     receipt.parent.mkdir(parents=True,exist_ok=True)
     receipt.write_text(json.dumps(record,indent=2)+'\n')
