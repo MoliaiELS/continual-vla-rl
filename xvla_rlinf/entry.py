@@ -21,12 +21,14 @@ def main(cfg):
     cfg=validate_cfg(cfg)
     from .rl_initialization import validate_rl_initialization
     validate_rl_initialization(cfg)
+    from .source_reset_pool import source_reset_worker, validate_source_reset_pool
+    env_worker = source_reset_worker(EnvWorker) if validate_source_reset_pool(cfg) else EnvWorker
     print(OmegaConf.to_yaml(cfg,resolve=True),flush=True)
     cluster=Cluster(cluster_cfg=cfg.cluster)
     placement=HybridComponentPlacement(cfg,cluster)
     rollout=AuditedRollout.create_group(cfg).launch(cluster,name=cfg.rollout.group_name,
                         placement_strategy=placement.get_strategy('rollout'))
-    env=EnvWorker.create_group(cfg).launch(cluster,name=cfg.env.group_name,
+    env=env_worker.create_group(cfg).launch(cluster,name=cfg.env.group_name,
                         placement_strategy=placement.get_strategy('env'))
     if cfg.runner.only_eval:
         from rlinf.runners.embodied_eval_runner import EmbodiedEvalRunner
