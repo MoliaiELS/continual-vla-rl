@@ -25,7 +25,7 @@ class BenchmarkSubmissionTests(unittest.TestCase):
     def arguments(self, **overrides):
         values = {'mode': 'benchmark_libero', 'gpu_model': None, 'gpus': 1,
                   'start_task': 0, 'task_count': 10, 'trials': 5,
-                  'checkpoint_job_id': None, 'partition': 'GPU'}
+                  'checkpoint_job_id': None, 'sft_steps': 256, 'partition': 'GPU'}
         return SimpleNamespace(**(values | overrides))
 
     def test_benchmark_shards_are_bounded(self):
@@ -103,6 +103,10 @@ class BenchmarkSubmissionTests(unittest.TestCase):
             self.assertIsNone(submit.benchmark_settings(args))
             self.assertEqual(Path(submit.checked_sft_checkpoint(args, submit.FEWSHOT_SFT_RUN, 256)),
                              checkpoint.resolve())
+            args.mode = 'benchmark_sft_fewshot'
+            args.sft_steps = 1024
+            with self.assertRaisesRegex(ValueError, 'global_step_1024'):
+                submit.benchmark_settings(args)
 
     def test_benchmark_gpu_type_does_not_bypass_budget(self):
         with patch.dict(submit.os.environ, {'USER': 'benchmark-test'}):

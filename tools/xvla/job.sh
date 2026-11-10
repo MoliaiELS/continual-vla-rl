@@ -103,13 +103,17 @@ PY
    export XVLA_INITIAL_SFT_CHECKPOINT="${4:?audited few-shot SFT actor checkpoint directory}"
    python -m xvla_rlinf.entry --config-name "${mode}_smoke" ;;
  sft) python -m xvla_rlinf.sft_entry --config-path "$repo/configs/xvla" --config-name sft_smoke ;;
- sft_fewshot) python -m xvla_rlinf.sft_entry --config-path "$repo/configs/xvla" --config-name sft_fewshot ;;
+ sft_fewshot)
+   sft_steps="${4:?bounded SFT step budget}"
+   [[ "$sft_steps" == 256 || "$sft_steps" == 1024 ]]
+   python -m xvla_rlinf.sft_entry --config-path "$repo/configs/xvla" --config-name sft_fewshot \
+     "runner.max_steps=$sft_steps" "runner.save_interval=$sft_steps" "actor.optim.total_training_steps=$sft_steps" ;;
  *) exit 2 ;;
 esac
 case "$mode" in
  ppo|grpo|grpo_exploration|grpo_stress|sft|ppo_pt|grpo_pt)
    python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$XVLA_RUN_DIR/${mode}-smoke/checkpoints/global_step_1/actor" ;;
  sft_fewshot)
-   python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$XVLA_RUN_DIR/sft_fewshot-smoke/checkpoints/global_step_256/actor" ;;
+   python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$XVLA_RUN_DIR/sft_fewshot-smoke/checkpoints/global_step_${sft_steps}/actor" ;;
 esac
 echo XVLA_JOB_PASS

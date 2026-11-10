@@ -178,3 +178,5 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\xvla\remote.ps1 
 先完成任务0的原生评估，检查5个配对初态、成功回合和完成步数，再核对任务0初态0的在线采样。PPO 和 GRPO 从同一个审计过的 SFT 导出加载策略张量，PPO 额外初始化观测价值头。每个算法以一次真实更新为验收目标，记录实际奖励、梯度、参数变化、同步、更新后 rollout 与 checkpoint 重载。PPO 需要观测到正奖励，GRPO 需要组内奖励方差。原生评估的800步上限与在线训练的300步上限分别记录。
 
 Pt 的在线验收默认申请一张 4090。可用 `-GpuModel 3090` 为两项作业选择相同的 3090，保持同一个预算、配置和 Slurm 可见设备检查。
+
+若 256 步的起点未取得有效回报，可在相同 Pt 起点、相同五条示教及相同学习率下使用 `sft_fewshot -SftSteps 1024`。后续评估、PPO 和 GRPO 同时指定该作业的 `-CheckpointJobId` 和 `-SftSteps 1024`，以选用正确的独立校验产物。

@@ -7,7 +7,8 @@ param(
     [ValidateRange(0,9)][int]$StartTask=0,
     [ValidateRange(1,10)][int]$TaskCount=10,
     [ValidateRange(1,50)][int]$Trials=5,
-    [ValidatePattern('^[0-9]+$')][string]$CheckpointJobId
+    [ValidatePattern('^[0-9]+$')][string]$CheckpointJobId,
+    [ValidateSet('256','1024')][string]$SftSteps='256'
 )
 $ErrorActionPreference='Stop'
 $OutputEncoding=[Text.UTF8Encoding]::new($false)
@@ -99,6 +100,11 @@ echo XVLA_DOWNLOAD_PID=`$!
    $submitOptions += " --checkpoint-job-id $CheckpointJobId"
   } elseif ($CheckpointJobId) {
    throw 'Checkpoint job ID requires an SFT benchmark or Pt RL mode'
+  }
+  if ($Value -in @('sft_fewshot','benchmark_sft_fewshot','ppo_pt','grpo_pt')) {
+   $submitOptions += " --sft-steps $SftSteps"
+  } elseif ($PSBoundParameters.ContainsKey('SftSteps')) {
+   throw 'SFT steps apply only to few-shot SFT and its consumers'
   }
   Invoke-XRemote @"
 test -f '$snapshot/tools/xvla/job.sh'

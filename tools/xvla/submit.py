@@ -13,7 +13,8 @@ PT_RL_MODES = ('ppo_pt', 'grpo_pt')
 GPU_MODEL_MODES = (*BENCHMARK_MODELS, *PT_RL_MODES, 'convert_fewshot', 'sft_fewshot')
 FEWSHOT_DATASET = Path('datasets/fewshot-spatial-task0-5')
 FEWSHOT_SFT_RUN = 'sft_fewshot-smoke'
-FEWSHOT_SFT_STEP = 256
+FEWSHOT_SFT_STEPS = (256, 1024)
+FEWSHOT_SFT_MODES = ('sft_fewshot', 'benchmark_sft_fewshot', *PT_RL_MODES)
 
 def discover_task0_source(data_root: Path):
     """Read only our project's raw-data tree and pinned HF download receipt."""
@@ -62,7 +63,7 @@ def benchmark_settings(args):
     if model == 'sft-smoke':
         checkpoint = checked_sft_checkpoint(args, 'sft-smoke', 1)
     elif model == 'sft-fewshot':
-        checkpoint = checked_sft_checkpoint(args, FEWSHOT_SFT_RUN, FEWSHOT_SFT_STEP)
+        checkpoint = checked_sft_checkpoint(args, FEWSHOT_SFT_RUN, args.sft_steps)
     elif args.checkpoint_job_id is not None:
         raise ValueError('--checkpoint-job-id applies only to SFT benchmarks and Pt RL')
 
@@ -119,12 +120,15 @@ def main():
     p.add_argument('--task-count', type=int, default=10)
     p.add_argument('--trials', type=int, default=5)
     p.add_argument('--checkpoint-job-id')
+    p.add_argument('--sft-steps', type=int, choices=FEWSHOT_SFT_STEPS, default=FEWSHOT_SFT_STEPS[0])
     p.add_argument('--convert-output',type=Path)
     p.add_argument('--convert-demonstrations',type=int,choices=[1,2])
     p.add_argument('--seed',type=int,default=1234)
     a=p.parse_args()
     if a.mode not in ('unit','imports') and a.gpus!=1:
         raise ValueError('Model, simulation and online audit modes require exactly one GPU')
+    if a.sft_steps != FEWSHOT_SFT_STEPS[0] and a.mode not in FEWSHOT_SFT_MODES:
+        raise ValueError('--sft-steps applies only to few-shot SFT and its consumers')
     benchmark = benchmark_settings(a)
     conversion=None
     initial_sft = None
@@ -141,9 +145,10 @@ def main():
         )]
     if a.mode == 'sft_fewshot':
         require_fewshot_manifest(a.data)
+        extra = [str(a.sft_steps)]
     if a.mode in PT_RL_MODES:
-        checkpoint = checked_sft_checkpoint(a, FEWSHOT_SFT_RUN, FEWSHOT_SFT_STEP)
-        initial_sft = {'checkpoint_job_id': a.checkpoint_job_id, 'checkpoint': checkpoint}
+        checkpoint = checked_sft_checkpoint(a, FEWSHOT_SFT_RUN, a.sft_steps)
+        initial_sft = {'checkpoint_job_id': a.checkpoint_job_id, 'checkpoint': checkpoint, 'sft_steps': a.sft_steps}
         extra = [checkpoint]
     import fcntl
     a.data.mkdir(parents=True,exist_ok=True)
