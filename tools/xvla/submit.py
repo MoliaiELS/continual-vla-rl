@@ -8,13 +8,18 @@ BENCHMARK_MODELS = {
     'benchmark_pt': 'pt',
     'benchmark_sft_smoke': 'sft-smoke',
     'benchmark_sft_fewshot': 'sft-fewshot',
+    'benchmark_sft_source10': 'sft-fewshot',
 }
 PT_RL_MODES = ('ppo_pt', 'grpo_pt')
-GPU_MODEL_MODES = (*BENCHMARK_MODELS, *PT_RL_MODES, 'convert_fewshot', 'sft_fewshot')
+SOURCE_DATASET = Path('datasets/source-spatial-task0-10')
+CONVERSION_MODES = ('convert', 'convert_fewshot', 'convert_source10')
+GPU_MODEL_MODES = (*BENCHMARK_MODELS, *PT_RL_MODES, 'convert_fewshot', 'sft_fewshot',
+                   'replay_absolute', 'sft_action_check', 'convert_source10', 'sft_source10')
 FEWSHOT_DATASET = Path('datasets/fewshot-spatial-task0-5')
 FEWSHOT_SFT_RUN = 'sft_fewshot-smoke'
 FEWSHOT_SFT_STEPS = (256, 1024)
-FEWSHOT_SFT_MODES = ('sft_fewshot', 'benchmark_sft_fewshot', *PT_RL_MODES)
+FEWSHOT_SFT_MODES = ('sft_fewshot', 'benchmark_sft_fewshot', 'sft_action_check', 'sft_source10',
+                     'benchmark_sft_source10', *PT_RL_MODES)
 
 def discover_task0_source(data_root: Path):
     """Read only our project's raw-data tree and pinned HF download receipt."""
@@ -50,8 +55,8 @@ def benchmark_settings(args):
     if model is None:
         if (args.start_task, args.task_count, args.trials) != (0, 10, 5):
             raise ValueError('Benchmark shard options require a benchmark mode')
-        if args.checkpoint_job_id is not None and args.mode not in PT_RL_MODES:
-            raise ValueError('--checkpoint-job-id requires SFT benchmark or Pt RL mode')
+        if args.checkpoint_job_id is not None and args.mode not in (*PT_RL_MODES, 'sft_action_check'):
+            raise ValueError('--checkpoint-job-id requires an SFT benchmark, action check or Pt RL mode')
         return None
 
     if not 0 <= args.start_task < args.start_task + args.task_count <= 10:
@@ -63,7 +68,10 @@ def benchmark_settings(args):
     if model == 'sft-smoke':
         checkpoint = checked_sft_checkpoint(args, 'sft-smoke', 1)
     elif model == 'sft-fewshot':
-        checkpoint = checked_sft_checkpoint(args, FEWSHOT_SFT_RUN, args.sft_steps)
+        run = 'sft_source10' if args.mode == 'benchmark_sft_source10' else FEWSHOT_SFT_RUN
+        if args.mode == 'benchmark_sft_source10' and (args.start_task, args.task_count) != (0, 1):
+            raise ValueError('Source-10 development evaluation is restricted to Spatial task 0')
+        checkpoint = checked_sft_checkpoint(args, run, args.sft_steps)
     elif args.checkpoint_job_id is not None:
         raise ValueError('--checkpoint-job-id applies only to SFT benchmarks and Pt RL')
 
@@ -73,19 +81,25 @@ def benchmark_settings(args):
 
 
 def conversion_settings(args):
-    fewshot = args.mode == 'convert_fewshot'
+    fewshot = args.mode in ('convert_fewshot', 'convert_source10')
     if fewshot and (args.convert_output is not None or args.convert_demonstrations is not None or args.seed != 1234):
-        raise ValueError('convert_fewshot fixes the destination, five demonstrations, and seed 1234')
+        raise ValueError('Controlled conversion fixes the destination, demonstration count and seed 1234')
     if not os.environ.get('FYP_DATA_ROOT'):
         raise RuntimeError('FYP_DATA_ROOT must be supplied from current project settings')
-    if fewshot:
+    if args.mode == 'convert_source10':
+        require_fewshot_manifest(args.data)
+        output = args.data.resolve() / SOURCE_DATASET
+        demonstrations = 10
+    elif fewshot:
         output = args.data.resolve() / FEWSHOT_DATASET
         demonstrations = 5
-        if output.exists() or output.is_symlink():
-            raise FileExistsError(f'Few-shot destination already exists: {output}; inspect/reuse it')
     else:
         output = (args.convert_output or args.data / 'datasets/limited-spatial-task0').resolve()
         demonstrations = args.convert_demonstrations or 1
+    if fewshot:
+        if output.exists() or output.is_symlink():
+            raise FileExistsError(f'Few-shot destination already exists: {output}; inspect/reuse it')
+    else:
         if (output / 'manifest.json').exists():
             raise FileExistsError(f'Converted manifest already exists: {output}/manifest.json; inspect/reuse it')
     conversion = discover_task0_source(Path(os.environ['FYP_DATA_ROOT']))
@@ -94,25 +108,27 @@ def conversion_settings(args):
     return conversion
 
 
-def require_fewshot_manifest(data):
-    path = data.resolve() / FEWSHOT_DATASET / 'manifest.json'
+def require_fewshot_manifest(data, dataset=FEWSHOT_DATASET, demonstrations=5):
+    path = data.resolve() / dataset / 'manifest.json'
     manifest = json.loads(path.read_text(encoding='utf-8'))
     episodes = manifest.get('episodes', [])
-    if (manifest.get('requested_demonstrations') != 5 or manifest.get('demonstrations') != 5
-            or manifest.get('selection_seed') != 1234 or len(episodes) != 5
-            or len({episode['demo_id'] for episode in episodes}) != 5
+    if (manifest.get('requested_demonstrations') != demonstrations or manifest.get('demonstrations') != demonstrations
+            or manifest.get('selection_seed') != 1234 or len(episodes) != demonstrations
+            or len({episode['demo_id'] for episode in episodes}) != demonstrations
             or any(episode['task_suite'] != 'libero_spatial' or episode['task_id'] != 0
                    or not episode.get('success_final') or not episode.get('controller_replay_verified')
                    for episode in episodes)):
-        raise ValueError(f'Expected five verified task-0 demonstrations selected with seed 1234: {path}')
+        label = 'five' if demonstrations == 5 else str(demonstrations)
+        raise ValueError(f'Expected {label} verified task-0 demonstrations selected with seed 1234: {path}')
+    return path
 
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--repo',type=Path,required=True);p.add_argument('--data',type=Path,required=True)
     p.add_argument('--mode', choices=[
-        'unit', 'imports', 'alignment', 'native_eval', 'stochastic_eval', 'convert',
-        'sft', 'ppo', 'grpo', 'grpo_exploration', 'grpo_stress', 'convert_fewshot',
-        'sft_fewshot', *PT_RL_MODES, *BENCHMARK_MODELS,
+        'unit', 'imports', 'alignment', 'native_eval', 'stochastic_eval', *CONVERSION_MODES,
+        'sft', 'ppo', 'grpo', 'grpo_exploration', 'grpo_stress',
+        'sft_fewshot', 'sft_source10', 'replay_absolute', 'sft_action_check', *PT_RL_MODES, *BENCHMARK_MODELS,
     ], required=True)
     p.add_argument('--gpus',type=int,choices=[0,1,2],required=True);p.add_argument('--partition',required=True)
     p.add_argument('--gpu-model', choices=['3090', '4090'])
@@ -137,7 +153,7 @@ def main():
         extra = [str(a.start_task), str(a.task_count), str(a.trials)]
         if benchmark['checkpoint'] is not None:
             extra.append(benchmark['checkpoint'])
-    if a.mode in ('convert', 'convert_fewshot'):
+    if a.mode in CONVERSION_MODES:
         conversion = conversion_settings(a)
         extra = [str(conversion[key]) for key in (
             'source_hdf5', 'output_dir', 'data_revision', 'source_sha256',
@@ -146,6 +162,15 @@ def main():
     if a.mode == 'sft_fewshot':
         require_fewshot_manifest(a.data)
         extra = [str(a.sft_steps)]
+    if a.mode == 'sft_source10':
+        manifest = require_fewshot_manifest(a.data, SOURCE_DATASET, 10)
+        extra = [str(a.sft_steps), str(manifest)]
+    if a.mode == 'replay_absolute':
+        extra = [str(require_fewshot_manifest(a.data))]
+    if a.mode == 'sft_action_check':
+        manifest = require_fewshot_manifest(a.data)
+        checkpoint = checked_sft_checkpoint(a, FEWSHOT_SFT_RUN, a.sft_steps)
+        extra = [str(manifest), checkpoint]
     if a.mode in PT_RL_MODES:
         checkpoint = checked_sft_checkpoint(a, FEWSHOT_SFT_RUN, a.sft_steps)
         initial_sft = {'checkpoint_job_id': a.checkpoint_job_id, 'checkpoint': checkpoint, 'sft_steps': a.sft_steps}

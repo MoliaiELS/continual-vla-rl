@@ -81,6 +81,24 @@ def summarize(episodes: list[dict], plan: list[dict]) -> dict:
             "macro_success_rate": sum(row["success_rate"] for row in tasks.values()) / len(tasks)}
 
 
+def _sft_layout(saved, model_path):
+    saved_xvla = saved.get("xvla", {})
+    scope = saved_xvla.get("update_scope")
+    if (Path(saved["model_path"]).resolve() != model_path or saved.get("add_value_head") is not False
+            or saved.get("num_action_chunks") != CHUNK or scope not in ("prompt_heads", "lora_heads")
+            or any(saved_xvla.get(key) != value for key, value in {
+                "domain_rows": [DOMAIN], "domain_id": DOMAIN, "steps": SOLVER_STEPS,
+            }.items())):
+        raise ValueError("SFT policy layout must match the fixed Pt domain-3 protocol")
+    layout = {"update_scope": scope}
+    if scope == "lora_heads" and "lora_rank" in saved_xvla:
+        rank = saved_xvla["lora_rank"]
+        if type(rank) is not int or rank < 1:
+            raise ValueError("SFT LoRA checkpoint must have a positive integer rank")
+        layout["lora_rank"] = rank
+    return layout
+
+
 def _load_policy(model_name, checkpoint):
     import torch
     from omegaconf import OmegaConf
@@ -109,17 +127,13 @@ def _load_policy(model_name, checkpoint):
         evidence, weights = read_evidence(checkpoint)
         check = json.loads((checkpoint / "checkpoint_check.json").read_text(encoding="utf-8"))
         if (check.get("status") != "PASS" or check.get("strict_state_load") is not True
-                or check.get("digest") != evidence["digest"]):
+                or check.get("digest") != evidence["digest"] or check.get("exported_digest") != evidence["digest"]
+                or check.get("model_config") != evidence["model_config"]):
             raise ValueError("SFT checkpoint must pass the independent strict full-state audit")
-        saved = evidence["model_config"]
-        saved_xvla = saved.get("xvla", {})
-        if (Path(saved["model_path"]).resolve() != model_path or saved.get("add_value_head") is not False
-                or saved.get("num_action_chunks") != CHUNK
-                or any(saved_xvla.get(key) != value for key, value in {
-                    "update_scope": "prompt_heads", "domain_rows": [DOMAIN], "domain_id": DOMAIN,
-                    "steps": SOLVER_STEPS,
-                }.items())):
-            raise ValueError("SFT policy layout must match the fixed Pt prompt-head protocol")
+        layout = _sft_layout(evidence["model_config"], model_path)
+        config.xvla.update(layout)
+        if layout["update_scope"] == "lora_heads":
+            provenance.update(layout)
 
     model = XVLAPolicy.from_checkpoint(config, torch.float32)
     if model.core.num_actions != CHUNK:

@@ -90,6 +90,7 @@ def convert_demonstrations(
     seed: int = 1234,
     camera_size: int = 256,
     expected_source_sha256: str | None = None,
+    include_manifest: str | Path | None = None,
     env_factory=None,
 ) -> Path:
     """Replay full selected demos and publish a provenance-checked manifest.
@@ -128,7 +129,22 @@ def convert_demonstrations(
                        key=lambda value: int(value.split("_")[-1]))
         if len(names) < demonstrations:
             raise ValueError("Requested more independent demonstrations than present")
-        selected = np.random.default_rng(seed).choice(names, demonstrations, replace=False).tolist()
+        rng = np.random.default_rng(seed)
+        included = []
+        if include_manifest is not None:
+            previous = load_manifest(include_manifest)
+            if (previous["source_sha256"] != manifest["source_sha256"]
+                    or previous["data_revision"] != data_revision
+                    or previous["selection_seed"] != seed
+                    or any((episode["task_suite"], episode["task_id"]) != (task_suite, task_id)
+                           for episode in previous["episodes"])):
+                raise ValueError("Included demonstrations must match source, revision, seed and task")
+            included = [episode["demo_id"] for episode in previous["episodes"]]
+            if not set(included).issubset(names) or len(included) >= demonstrations:
+                raise ValueError("Included demonstrations must be a strict subset of the requested set")
+            manifest["included_manifest_sha256"] = previous["manifest_sha256"]
+        available = [name for name in names if name not in included]
+        selected = included + rng.choice(available, demonstrations - len(included), replace=False).tolist()
         manifest["selected_demo_ids"] = selected
         for demo_id in selected:
             demo = original["data"][demo_id]
@@ -402,6 +418,7 @@ def main():
     convert.add_argument("--data-revision", required=True)
     convert.add_argument("--source-sha256", help="Expected SHA256 from the pinned download receipt")
     convert.add_argument("--demonstrations", type=int, default=1)
+    convert.add_argument("--include-manifest", help="Keep every demonstration from a matching prior conversion")
     convert.add_argument("--seed", type=int, default=1234)
     convert.add_argument("--camera-size", type=int, default=256)
     check = commands.add_parser("inspect", help="Validate a converted dataset without starting simulation")
@@ -427,7 +444,8 @@ def main():
                                          task_id=args.task_id, data_revision=args.data_revision,
                                          demonstrations=args.demonstrations, seed=args.seed,
                                          camera_size=args.camera_size,
-                                         expected_source_sha256=args.source_sha256)
+                                         expected_source_sha256=args.source_sha256,
+                                         include_manifest=args.include_manifest)
         print(str(manifest))
     else:
         manifest = load_manifest(args.manifest)

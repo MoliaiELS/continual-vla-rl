@@ -1,8 +1,9 @@
 """Paired benchmark identities and scoring, without running simulation."""
 
 import unittest
+from pathlib import Path
 
-from xvla_rlinf.benchmark import build_trials, summarize
+from xvla_rlinf.benchmark import _sft_layout, build_trials, summarize
 
 
 def completed(trial, *, success, steps):
@@ -53,3 +54,30 @@ class BenchmarkAccountingTests(unittest.TestCase):
         for args in ((-1, 1, 1), (9, 2, 1), (0, 10, 6), (0, 1, 0)):
             with self.subTest(args=args), self.assertRaises(ValueError):
                 build_trials(*args)
+
+
+class BenchmarkSftLayoutTests(unittest.TestCase):
+    def setUp(self):
+        self.pt_path = (Path.cwd() / "X-VLA-Pt").resolve()
+        self.config = {
+            "model_path": str(self.pt_path), "add_value_head": False, "num_action_chunks": 30,
+            "xvla": {"update_scope": "prompt_heads", "domain_rows": [3], "domain_id": 3, "steps": 10},
+        }
+
+    def test_preserves_prompt_heads(self):
+        self.assertEqual(_sft_layout(self.config, self.pt_path), {"update_scope": "prompt_heads"})
+
+    def test_uses_saved_lora_rank_without_copying_training_settings(self):
+        self.config["xvla"].update(update_scope="lora_heads", lora_rank=16,
+                                   eval_sampler="terminal_clean_gaussian_v1")
+        self.assertEqual(_sft_layout(self.config, self.pt_path), {"update_scope": "lora_heads", "lora_rank": 16})
+
+    def test_rejects_invalid_lora_rank_and_nonmatching_domain(self):
+        self.config["xvla"]["update_scope"] = "lora_heads"
+        for rank in (0, True, "8"):
+            self.config["xvla"]["lora_rank"] = rank
+            with self.subTest(rank=rank), self.assertRaises(ValueError):
+                _sft_layout(self.config, self.pt_path)
+        self.config["xvla"].update(lora_rank=8, domain_rows=[2, 3])
+        with self.assertRaises(ValueError):
+            _sft_layout(self.config, self.pt_path)

@@ -55,20 +55,34 @@ case "$mode" in
  alignment) python -m xvla_rlinf.smoke alignment ;;
  native_eval) python -m xvla_rlinf.entry --config-name native_eval_smoke ;;
  stochastic_eval) python -m xvla_rlinf.entry --config-name stochastic_eval_smoke ;;
- benchmark_libero|benchmark_pt|benchmark_sft_smoke|benchmark_sft_fewshot)
+ replay_absolute)
+   python -m xvla_rlinf.replay_absolute "${4:?converted manifest}" \
+     --output "$XVLA_RUN_DIR/absolute_replay.json" ;;
+ sft_action_check)
+   python -m xvla_rlinf.sft_action_check --manifest "${4:?converted manifest}" \
+     --checkpoint "${5:?SFT actor checkpoint directory}" ;;
+ benchmark_libero|benchmark_pt|benchmark_sft_smoke|benchmark_sft_fewshot|benchmark_sft_source10)
    benchmark_model="${mode#benchmark_}"
    benchmark_args=(--start-task "${4:?start task}" --task-count "${5:?task count}" --trials "${6:?trials}")
+   if [[ "$mode" == benchmark_sft_source10 ]]; then benchmark_model=sft_fewshot; fi
    if [[ "$mode" == benchmark_sft_* ]]; then
      benchmark_model="${benchmark_model//_/-}"
      benchmark_args+=(--checkpoint "${7:?SFT actor checkpoint directory}")
    fi
    python -m xvla_rlinf.benchmark --model "$benchmark_model" "${benchmark_args[@]}" ;;
- convert|convert_fewshot)
+ convert|convert_fewshot|convert_source10)
    source_hdf5="${4:?source HDF5}"; converted_dir="${5:?converted output}"
    data_revision="${6:?data revision}"; source_hash="${7:?source SHA256}"
    selection_seed="${8:?selection seed}"; demonstrations="${9:?demonstration count}"
-   if [[ "$mode" == convert_fewshot ]]; then
-     [[ "$selection_seed" == 1234 && "$demonstrations" == 5 ]]
+   convert_args=()
+   if [[ "$mode" != convert ]]; then
+     [[ "$selection_seed" == 1234 ]]
+     if [[ "$mode" == convert_fewshot ]]; then
+       [[ "$demonstrations" == 5 ]]
+     else
+       [[ "$demonstrations" == 10 ]]
+       convert_args+=(--include-manifest "$FYP_XVLA_DATA/datasets/fewshot-spatial-task0-5/manifest.json")
+     fi
      publish_dir="$converted_dir"
      if [[ -e "$publish_dir" || -L "$publish_dir" ]]; then
        echo "Few-shot destination already exists: $publish_dir" >&2
@@ -78,10 +92,14 @@ case "$mode" in
    fi
    python -m xvla_rlinf.sft convert --source-hdf5 "$source_hdf5" --output-dir "$converted_dir" \
      --task-suite libero_spatial --task-id 0 --data-revision "$data_revision" \
-     --source-sha256 "$source_hash" --seed "$selection_seed" --demonstrations "$demonstrations" \
+     --source-sha256 "$source_hash" --seed "$selection_seed" --demonstrations "$demonstrations" "${convert_args[@]}" \
      2>&1 | tee "$XVLA_RUN_DIR/convert.log"
    python -m xvla_rlinf.sft inspect "$converted_dir/manifest.json"
-   if [[ "$mode" == convert_fewshot ]]; then
+   if [[ "$mode" != convert ]]; then
+     if [[ "$mode" == convert_source10 ]]; then
+       python -m xvla_rlinf.replay_absolute "$converted_dir/manifest.json" \
+         --limit "$demonstrations" --output "$XVLA_RUN_DIR/absolute_replay.json"
+     fi
      python - "$converted_dir" "$publish_dir" <<'PY'
 import fcntl
 import os
@@ -103,11 +121,17 @@ PY
    export XVLA_INITIAL_SFT_CHECKPOINT="${4:?audited few-shot SFT actor checkpoint directory}"
    python -m xvla_rlinf.entry --config-name "${mode}_smoke" ;;
  sft) python -m xvla_rlinf.sft_entry --config-path "$repo/configs/xvla" --config-name sft_smoke ;;
- sft_fewshot)
+ sft_fewshot|sft_source10)
    sft_steps="${4:?bounded SFT step budget}"
    [[ "$sft_steps" == 256 || "$sft_steps" == 1024 ]]
+   sft_args=()
+   if [[ "$mode" == sft_source10 ]]; then
+     sft_args+=("data.train_data_paths=${5:?converted manifest}" data.manifest_requirements.demonstrations=10
+                runner.logger.experiment_name=sft_source10)
+   fi
    python -m xvla_rlinf.sft_entry --config-path "$repo/configs/xvla" --config-name sft_fewshot \
-     "runner.max_steps=$sft_steps" "runner.save_interval=$sft_steps" "actor.optim.total_training_steps=$sft_steps" ;;
+     "runner.max_steps=$sft_steps" "runner.save_interval=$sft_steps" "actor.optim.total_training_steps=$sft_steps" \
+     "${sft_args[@]}" ;;
  *) exit 2 ;;
 esac
 case "$mode" in
@@ -115,5 +139,7 @@ case "$mode" in
    python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$XVLA_RUN_DIR/${mode}-smoke/checkpoints/global_step_1/actor" ;;
  sft_fewshot)
    python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$XVLA_RUN_DIR/sft_fewshot-smoke/checkpoints/global_step_${sft_steps}/actor" ;;
+ sft_source10)
+   python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$XVLA_RUN_DIR/sft_source10/checkpoints/global_step_${sft_steps}/actor" ;;
 esac
 echo XVLA_JOB_PASS
