@@ -26,6 +26,10 @@
 - Slurm 19515 在相对回放 `demo_17` 时终局失败，以 1:0 退出，未发布十示教清单。保留该次日志和部分转换产物，后续按固定候选顺序递补并保留严格终局门槛。
 - Slurm 19517 按固定顺序递补，排除 `demo_17` 和 `demo_42`。十条示教均通过相对和绝对终局回放，共 885 个动作帧。原五条示教的 ID 与 HDF5 SHA256 逐项相同。发布清单为 `datasets/source-spatial-task0-10/manifest.json`，SHA256 为 `0a3d6d871939e3365cd8719e94f2c6946cf40a594643c579cc82f733cb245bd77`。Slurm 19518 的加载器确认 785 个有效训练窗口。
 - Slurm 19518 在 3090 完成 1,024 次 prompt/action heads 更新，五个训练张量改变，冻结组未变化。同进程恢复和独立严格重载均通过，退出 0:0，Slurm 耗时 649 秒。闭环评估使用作业 19521。
+- Slurm 19521 在原生 benchmark 完成 5 回合，成功 0/5，均达到 800 个策略步。与五示教版 19511 的任务、回合、环境种子、策略种子和初态哈希逐项匹配。
+- Slurm 19519 的单测在旧 actor 测试 fixture 中出现两次配置缺失。补齐 fixture 后，19522 在专用环境通过全部 153 项测试，包含真实 Torch 和 PEFT 的 domain 行热启动测试。
+- Slurm 19523 从 19518 的 1,024 步 checkpoint 热启动同一十示教清单。256 次联合优化后有 532 个 LoRA 张量和五个 domain 3 prompt/action-heads 张量改变，冻结组未变化。同进程恢复和独立严格重载通过，退出 0:0。Slurm 耗时 395 秒，5 秒采样的作业计算进程峰值为 5,990 MiB。闭环评估使用作业 19524。
+- Slurm 19524 完成相同五个初态的原生评估，成功 0/5，均达到 800 个策略步，退出 0:0。
 
 ## 直接 PPO 与毕设主对照
 
@@ -44,6 +48,8 @@
 ```
 
 若 prompt/action heads 闭环仍不合格，阶段二用上一步审计通过的 1,024 步权重和同一十示教清单。继承五个已训练的 domain 3 参数张量，单独初始化 all-linear LoRA（rank 8、alpha 16）和优化器。首轮 256 步、FP32、batch 1，按固定公开 PEFT 代码的默认联合更新阶段使用恒定学习率。本地两阶段是可审计的小预算试验，论文的联合 warm-up 与计算规模另行区分。
+
+若 256 步仍无成功，下一条训练从同一个 prompt/action-heads checkpoint 重新开始阶段二，将联合预算扩大到 1,024 步、batch 4，共 4,096 次窗口呈现。它用于检验训练预算扩大的效果，步数和 batch 的贡献无法单独归因。先复用同一开发面板确认是否出现闭环成功，再决定是否继续增加示教。
 
 ```powershell
 ./tools/xvla/remote.ps1 submit sft_source10_lora -SftSteps 256 -CheckpointJobId $promptJob -GpuModel 4090

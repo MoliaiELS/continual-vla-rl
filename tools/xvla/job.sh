@@ -129,6 +129,9 @@ PY
    if [[ "$mode" == sft_source10_lora ]]; then
      sft_args+=("+runner.initial_prompt_checkpoint=${6:?audited prompt-head SFT checkpoint}"
                 actor.model.xvla.update_scope=lora_heads +actor.model.xvla.lora_rank=8)
+     if [[ "$sft_steps" == 1024 ]]; then
+       sft_args+=(actor.micro_batch_size=4 actor.global_batch_size=4)
+     fi
    fi
    python -m xvla_rlinf.sft_entry --config-path "$repo/configs/xvla" --config-name sft_fewshot \
      "runner.max_steps=$sft_steps" "runner.save_interval=$sft_steps" "actor.optim.total_training_steps=$sft_steps" \
