@@ -11,12 +11,13 @@ import hashlib
 import json
 import os
 import itertools
+import shutil
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from .transforms import absolute_actions_to_6d, absolute_sft_window
+from .transforms import absolute_actions_to_6d, absolute_sft_window, env_actions_from_model
 
 
 SCHEMA = "xvla_libero_controller_abs_v1"
@@ -91,6 +92,7 @@ def convert_demonstrations(
     camera_size: int = 256,
     expected_source_sha256: str | None = None,
     include_manifest: str | Path | None = None,
+    verify_absolute: bool = False,
     env_factory=None,
 ) -> Path:
     """Replay full selected demos and publish a provenance-checked manifest.
@@ -130,7 +132,7 @@ def convert_demonstrations(
         if len(names) < demonstrations:
             raise ValueError("Requested more independent demonstrations than present")
         rng = np.random.default_rng(seed)
-        included = []
+        included = {}
         if include_manifest is not None:
             previous = load_manifest(include_manifest)
             if (previous["source_sha256"] != manifest["source_sha256"]
@@ -139,23 +141,29 @@ def convert_demonstrations(
                     or any((episode["task_suite"], episode["task_id"]) != (task_suite, task_id)
                            for episode in previous["episodes"])):
                 raise ValueError("Included demonstrations must match source, revision, seed and task")
-            included = [episode["demo_id"] for episode in previous["episodes"]]
+            included = {episode["demo_id"]: episode for episode in previous["episodes"]}
             if not set(included).issubset(names) or len(included) >= demonstrations:
                 raise ValueError("Included demonstrations must be a strict subset of the requested set")
             manifest["included_manifest_sha256"] = previous["manifest_sha256"]
         available = [name for name in names if name not in included]
-        selected = included + rng.choice(available, demonstrations - len(included), replace=False).tolist()
-        manifest["selected_demo_ids"] = selected
-        for demo_id in selected:
+        selected = list(included) + rng.choice(available, demonstrations - len(included), replace=False).tolist()
+        candidates = selected
+        if verify_absolute:
+            from .replay_absolute import _replay
+
+            remaining = [name for name in available if name not in selected]
+            candidates = selected + rng.permutation(remaining).tolist()
+            manifest["absolute_replay_required"] = "success_final"
+            manifest["rejected_demos"] = []
+        for demo_id in candidates:
             demo = original["data"][demo_id]
             actions, states = np.asarray(demo["actions"]), np.asarray(demo["states"])
             if actions.ndim != 2 or actions.shape[1] != 7 or len(actions) <= 10 or len(states) == 0:
                 raise ValueError("Expected full relative-action7 demonstration with initial simulator state")
-            env, task = make_env(task_suite, task_id, camera_size)
             target = output_dir / f"{task_suite}_task{task_id}_{demo_id}.hdf5"
             if target.exists():
-                env.close()
                 raise FileExistsError(target)
+            env, task = make_env(task_suite, task_id, camera_size)
             try:
                 env.seed(0)
                 env.reset()
@@ -176,9 +184,34 @@ def convert_demonstrations(
                     main.append(np.asarray(obs["agentview_image"])[::-1, ::-1].copy())
                     wrist.append(np.asarray(obs["robot0_eye_in_hand_image"]).copy())
                     ever, final = ever or bool(done), bool(done)
-                if not final:
-                    raise RuntimeError(f"Replay did not finish successfully: {task_suite}/{task_id}/{demo_id}")
+                control_freq = getattr(env.env, "control_freq", None)
+            finally:
+                env.close()
+            prior_episode = included.get(demo_id)
+            if prior_episode is None:
                 raw10 = absolute_actions_to_6d(np.asarray(absolute))
+            else:
+                with h5py.File(prior_episode["resolved_path"], "r") as original_episode:
+                    raw10 = np.asarray(original_episode["abs_action_6d"])
+            absolute_result = None
+            if verify_absolute and final:
+                labels = raw10.copy()
+                labels[:, 9] = labels[:, 9] > 0
+                absolute_actions = env_actions_from_model(labels, rotation_backend="robosuite")
+                absolute_result = _replay(make_env, {"task_suite": task_suite, "task_id": task_id},
+                                          states[0], absolute_actions, use_delta=False)
+                if absolute_result["control_freq"] != control_freq:
+                    raise RuntimeError(f"Controller replay frequency changed: {demo_id}")
+            if not final or (verify_absolute and not absolute_result["success_final"]):
+                rejected = {"demo_id": demo_id, "relative_success_ever": ever,
+                            "relative_success_final": final, "absolute_replay": absolute_result,
+                            "action_steps": len(actions), "settling_steps": 10}
+                if not verify_absolute or prior_episode is not None:
+                    raise RuntimeError(f"Required replay did not finish successfully: {rejected}")
+                manifest["rejected_demos"].append(rejected)
+                print("XVLA_SFT_REJECTED " + json.dumps(rejected), flush=True)
+                continue
+            if prior_episode is None:
                 with h5py.File(target, "x") as converted:
                     converted.attrs.update(schema=SCHEMA, source_commit=SOURCE_COMMIT,
                                            controller_replay_verified=True, success_final=final,
@@ -187,18 +220,25 @@ def convert_demonstrations(
                     converted.create_dataset("abs_action_6d", data=raw10.astype(np.float32))
                     converted.create_dataset("images/main", data=np.stack(main), compression="lzf")
                     converted.create_dataset("images/wrist", data=np.stack(wrist), compression="lzf")
-                manifest["episodes"].append({
-                    "path": target.name, "sha256": sha256_file(target),
-                    "task_suite": task_suite, "task_id": task_id, "task_name": task.name,
-                    "language": task.language, "demo_id": demo_id, "frames": len(actions),
-                    "success_ever": ever, "success_final": final,
-                    "controller_replay_verified": True,
-                    "conversion_env_steps": len(actions), "settling_env_steps": 10,
-                    "control_freq": getattr(env.env, "control_freq", None),
-                })
-                print("XVLA_SFT_CONVERTED " + json.dumps(manifest["episodes"][-1]), flush=True)
-            finally:
-                env.close()
+            else:
+                shutil.copyfile(prior_episode["resolved_path"], target)
+            manifest["episodes"].append({
+                "path": target.name, "sha256": sha256_file(target),
+                "task_suite": task_suite, "task_id": task_id, "task_name": task.name,
+                "language": task.language, "demo_id": demo_id, "frames": len(actions),
+                "success_ever": ever, "success_final": final,
+                "controller_replay_verified": True,
+                "conversion_env_steps": len(actions), "settling_env_steps": 10,
+                "control_freq": control_freq,
+            })
+            if absolute_result is not None:
+                manifest["episodes"][-1]["absolute_replay"] = absolute_result
+            print("XVLA_SFT_CONVERTED " + json.dumps(manifest["episodes"][-1]), flush=True)
+            if len(manifest["episodes"]) == demonstrations:
+                break
+    if len(manifest["episodes"]) != demonstrations:
+        raise RuntimeError(f"Only {len(manifest['episodes'])} of {demonstrations} demonstrations passed replay")
+    manifest["selected_demo_ids"] = [episode["demo_id"] for episode in manifest["episodes"]]
     manifest["demonstrations"] = len(manifest["episodes"])
     manifest["training_frames_before_static_filter"] = sum(ep["frames"] for ep in manifest["episodes"])
     target_manifest = output_dir / "manifest.json"
@@ -419,6 +459,8 @@ def main():
     convert.add_argument("--source-sha256", help="Expected SHA256 from the pinned download receipt")
     convert.add_argument("--demonstrations", type=int, default=1)
     convert.add_argument("--include-manifest", help="Keep every demonstration from a matching prior conversion")
+    convert.add_argument("--verify-absolute", action="store_true",
+                         help="Require native absolute final success and replace failed new candidates")
     convert.add_argument("--seed", type=int, default=1234)
     convert.add_argument("--camera-size", type=int, default=256)
     check = commands.add_parser("inspect", help="Validate a converted dataset without starting simulation")
@@ -445,7 +487,8 @@ def main():
                                          demonstrations=args.demonstrations, seed=args.seed,
                                          camera_size=args.camera_size,
                                          expected_source_sha256=args.source_sha256,
-                                         include_manifest=args.include_manifest)
+                                         include_manifest=args.include_manifest,
+                                         verify_absolute=args.verify_absolute)
         print(str(manifest))
     else:
         manifest = load_manifest(args.manifest)

@@ -81,7 +81,8 @@ case "$mode" in
        [[ "$demonstrations" == 5 ]]
      else
        [[ "$demonstrations" == 10 ]]
-       convert_args+=(--include-manifest "$FYP_XVLA_DATA/datasets/fewshot-spatial-task0-5/manifest.json")
+       convert_args+=(--include-manifest "$FYP_XVLA_DATA/datasets/fewshot-spatial-task0-5/manifest.json"
+                      --verify-absolute)
      fi
      publish_dir="$converted_dir"
      if [[ -e "$publish_dir" || -L "$publish_dir" ]]; then
@@ -96,10 +97,6 @@ case "$mode" in
      2>&1 | tee "$XVLA_RUN_DIR/convert.log"
    python -m xvla_rlinf.sft inspect "$converted_dir/manifest.json"
    if [[ "$mode" != convert ]]; then
-     if [[ "$mode" == convert_source10 ]]; then
-       python -m xvla_rlinf.replay_absolute "$converted_dir/manifest.json" \
-         --limit "$demonstrations" --output "$XVLA_RUN_DIR/absolute_replay.json"
-     fi
      python - "$converted_dir" "$publish_dir" <<'PY'
 import fcntl
 import os

@@ -25,10 +25,26 @@ from .sft import build_xvla_sft_dataloader
 
 
 class XVLASftWorker(FSDPVlaSftWorker):
-    """Only replace data loading; RLinf owns forward/backward/optimizer/save."""
+    """Supply X-VLA data and initialization to the pinned RLinf SFT worker."""
 
     def build_dataloader(self, data_paths, eval_dataset: bool = False):
         return build_xvla_sft_dataloader(self.cfg, self._world_size, self._rank, data_paths, eval_dataset)
+
+    def model_provider_func(self):
+        model = super().model_provider_func()
+        checkpoint = self.cfg.runner.get("initial_prompt_checkpoint")
+        if checkpoint is not None:
+            if not isinstance(checkpoint, str) or not checkpoint.strip() or self.cfg.runner.get("resume_dir"):
+                raise ValueError("Prompt warm-start requires a checkpoint path and a fresh SFT optimizer")
+            from .sft_initialization import initialize_lora_from_prompt
+
+            self._xvla_prompt_warm_start = initialize_lora_from_prompt(
+                model, self.cfg.actor.model, checkpoint,
+                manifest_path=self.cfg.data.train_data_paths,
+                manifest_sha256=self.data_config["manifest_sha256"],
+            )
+            self._audit_write("prompt_warm_start", **self._xvla_prompt_warm_start)
+        return model
 
     def _audit_write(self, event, **fields):
         record={"event":event,"rank":self._rank,**fields}
@@ -190,6 +206,8 @@ class XVLASftWorker(FSDPVlaSftWorker):
             from .audit_workers import state_digest
             digest=state_digest(self.get_model_state_dict(cpu_offload=True,full_state_dict=True))
             evidence={'model_config':OmegaConf.to_container(self.cfg.actor.model,resolve=True),'digest':digest}
+            if hasattr(self, "_xvla_prompt_warm_start"):
+                evidence["prompt_warm_start"] = self._xvla_prompt_warm_start
             (Path(save_path)/'xvla_evidence.json').write_text(json.dumps(evidence,indent=2)+'\n')
 
 

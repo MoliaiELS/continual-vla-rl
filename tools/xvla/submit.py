@@ -164,6 +164,11 @@ def main():
         extra = [str(a.sft_steps)]
     if a.mode == 'sft_source10':
         manifest = require_fewshot_manifest(a.data, SOURCE_DATASET, 10)
+        source = json.loads(manifest.read_text(encoding='utf-8'))
+        if (source.get('absolute_replay_required') != 'success_final'
+                or any(not episode.get('absolute_replay', {}).get('success_final')
+                       for episode in source['episodes'])):
+            raise ValueError('Source-10 SFT requires successful relative and absolute replay of every demonstration')
         extra = [str(a.sft_steps), str(manifest)]
     if a.mode == 'replay_absolute':
         extra = [str(require_fewshot_manifest(a.data))]
