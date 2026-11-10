@@ -34,3 +34,16 @@
 ## 执行与证据
 
 使用 `tools/xvla/remote.ps1`、独立 `xvla_rlinf` 环境及固定 commit worktree。仿真和训练经 Slurm，排除登录节点，保留获配 GPU 可见性。每个作业单卡，本用户合计最多两张 GPU。失败保留非零退出码，结果与作业日志分别保存在 X-VLA 数据根的 `runs/<job>/` 和 `logs/<job>.out/.err`。
+
+```powershell
+./tools/xvla/remote.ps1 submit convert_source10 -GpuModel 4090
+./tools/xvla/remote.ps1 submit sft_source10 -SftSteps 1024 -GpuModel 3090
+./tools/xvla/remote.ps1 submit benchmark_sft_source10 -TaskCount 1 -Trials 5 -SftSteps 1024 -CheckpointJobId $promptJob -GpuModel 3090
+```
+
+若 prompt/action heads 闭环仍不合格，阶段二用上一步审计通过的 1,024 步权重和同一十示教清单。继承五个已训练的 domain 3 参数张量，单独初始化 all-linear LoRA（rank 8、alpha 16）和优化器。首轮 256 步、FP32、batch 1，按固定公开 PEFT 代码的默认联合更新阶段使用恒定学习率。本地两阶段是可审计的小预算试验，论文的联合 warm-up 与计算规模另行区分。
+
+```powershell
+./tools/xvla/remote.ps1 submit sft_source10_lora -SftSteps 256 -CheckpointJobId $promptJob -GpuModel 4090
+./tools/xvla/remote.ps1 submit benchmark_sft_source10 -TaskCount 1 -Trials 5 -SftSteps 256 -CheckpointJobId $loraJob -GpuModel 3090
+```

@@ -90,18 +90,19 @@ echo XVLA_DOWNLOAD_PID=`$!
   } elseif ($StartTask -ne 0 -or $TaskCount -ne 10 -or $Trials -ne 5) {
    throw 'Benchmark shard options require a benchmark mode'
   }
-  if ($isBenchmark -or $Value -in @('convert_fewshot','sft_fewshot','ppo_pt','grpo_pt','replay_absolute','sft_action_check','convert_source10','sft_source10')) {
+  $isSourceSft=$Value -in @('sft_source10','sft_source10_lora')
+  if ($isBenchmark -or $isSourceSft -or $Value -in @('convert_fewshot','sft_fewshot','ppo_pt','grpo_pt','replay_absolute','sft_action_check','convert_source10')) {
    $submitOptions += " --gpu-model $GpuModel"
   } elseif ($PSBoundParameters.ContainsKey('GpuModel')) {
    throw 'GPU model override applies only to benchmark and Pt few-shot pipeline modes'
   }
-  if ($Value -in @('benchmark_sft_smoke','benchmark_sft_fewshot','benchmark_sft_source10','sft_action_check','ppo_pt','grpo_pt')) {
+  if ($Value -in @('benchmark_sft_smoke','benchmark_sft_fewshot','benchmark_sft_source10','sft_source10_lora','sft_action_check','ppo_pt','grpo_pt')) {
    if (-not $CheckpointJobId) { throw "$Value requires -CheckpointJobId" }
    $submitOptions += " --checkpoint-job-id $CheckpointJobId"
   } elseif ($CheckpointJobId) {
    throw 'Checkpoint job ID requires an SFT benchmark or Pt RL mode'
   }
-  if ($Value -in @('sft_fewshot','benchmark_sft_fewshot','sft_action_check','sft_source10','benchmark_sft_source10','ppo_pt','grpo_pt')) {
+  if ($isSourceSft -or $Value -in @('sft_fewshot','benchmark_sft_fewshot','sft_action_check','benchmark_sft_source10','ppo_pt','grpo_pt')) {
    $submitOptions += " --sft-steps $SftSteps"
   } elseif ($PSBoundParameters.ContainsKey('SftSteps')) {
    throw 'SFT steps apply only to few-shot SFT and its consumers'

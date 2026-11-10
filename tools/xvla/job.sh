@@ -118,13 +118,17 @@ PY
    export XVLA_INITIAL_SFT_CHECKPOINT="${4:?audited few-shot SFT actor checkpoint directory}"
    python -m xvla_rlinf.entry --config-name "${mode}_smoke" ;;
  sft) python -m xvla_rlinf.sft_entry --config-path "$repo/configs/xvla" --config-name sft_smoke ;;
- sft_fewshot|sft_source10)
+ sft_fewshot|sft_source10|sft_source10_lora)
    sft_steps="${4:?bounded SFT step budget}"
    [[ "$sft_steps" == 256 || "$sft_steps" == 1024 ]]
    sft_args=()
-   if [[ "$mode" == sft_source10 ]]; then
+   if [[ "$mode" != sft_fewshot ]]; then
      sft_args+=("data.train_data_paths=${5:?converted manifest}" data.manifest_requirements.demonstrations=10
                 runner.logger.experiment_name=sft_source10)
+   fi
+   if [[ "$mode" == sft_source10_lora ]]; then
+     sft_args+=("+runner.initial_prompt_checkpoint=${6:?audited prompt-head SFT checkpoint}"
+                actor.model.xvla.update_scope=lora_heads +actor.model.xvla.lora_rank=8)
    fi
    python -m xvla_rlinf.sft_entry --config-path "$repo/configs/xvla" --config-name sft_fewshot \
      "runner.max_steps=$sft_steps" "runner.save_interval=$sft_steps" "actor.optim.total_training_steps=$sft_steps" \
@@ -136,7 +140,7 @@ case "$mode" in
    python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$XVLA_RUN_DIR/${mode}-smoke/checkpoints/global_step_1/actor" ;;
  sft_fewshot)
    python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$XVLA_RUN_DIR/sft_fewshot-smoke/checkpoints/global_step_${sft_steps}/actor" ;;
- sft_source10)
+ sft_source10|sft_source10_lora)
    python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$XVLA_RUN_DIR/sft_source10/checkpoints/global_step_${sft_steps}/actor" ;;
 esac
 echo XVLA_JOB_PASS

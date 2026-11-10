@@ -14,12 +14,12 @@ PT_RL_MODES = ('ppo_pt', 'grpo_pt')
 SOURCE_DATASET = Path('datasets/source-spatial-task0-10')
 CONVERSION_MODES = ('convert', 'convert_fewshot', 'convert_source10')
 GPU_MODEL_MODES = (*BENCHMARK_MODELS, *PT_RL_MODES, 'convert_fewshot', 'sft_fewshot',
-                   'replay_absolute', 'sft_action_check', 'convert_source10', 'sft_source10')
+                   'replay_absolute', 'sft_action_check', 'convert_source10', 'sft_source10', 'sft_source10_lora')
 FEWSHOT_DATASET = Path('datasets/fewshot-spatial-task0-5')
 FEWSHOT_SFT_RUN = 'sft_fewshot-smoke'
 FEWSHOT_SFT_STEPS = (256, 1024)
 FEWSHOT_SFT_MODES = ('sft_fewshot', 'benchmark_sft_fewshot', 'sft_action_check', 'sft_source10',
-                     'benchmark_sft_source10', *PT_RL_MODES)
+                     'sft_source10_lora', 'benchmark_sft_source10', *PT_RL_MODES)
 
 def discover_task0_source(data_root: Path):
     """Read only our project's raw-data tree and pinned HF download receipt."""
@@ -55,8 +55,8 @@ def benchmark_settings(args):
     if model is None:
         if (args.start_task, args.task_count, args.trials) != (0, 10, 5):
             raise ValueError('Benchmark shard options require a benchmark mode')
-        if args.checkpoint_job_id is not None and args.mode not in (*PT_RL_MODES, 'sft_action_check'):
-            raise ValueError('--checkpoint-job-id requires an SFT benchmark, action check or Pt RL mode')
+        if args.checkpoint_job_id is not None and args.mode not in (*PT_RL_MODES, 'sft_action_check', 'sft_source10_lora'):
+            raise ValueError('--checkpoint-job-id requires an SFT benchmark, warm-start, action check or Pt RL mode')
         return None
 
     if not 0 <= args.start_task < args.start_task + args.task_count <= 10:
@@ -128,7 +128,8 @@ def main():
     p.add_argument('--mode', choices=[
         'unit', 'imports', 'alignment', 'native_eval', 'stochastic_eval', *CONVERSION_MODES,
         'sft', 'ppo', 'grpo', 'grpo_exploration', 'grpo_stress',
-        'sft_fewshot', 'sft_source10', 'replay_absolute', 'sft_action_check', *PT_RL_MODES, *BENCHMARK_MODELS,
+        'sft_fewshot', 'sft_source10', 'sft_source10_lora', 'replay_absolute', 'sft_action_check',
+        *PT_RL_MODES, *BENCHMARK_MODELS,
     ], required=True)
     p.add_argument('--gpus',type=int,choices=[0,1,2],required=True);p.add_argument('--partition',required=True)
     p.add_argument('--gpu-model', choices=['3090', '4090'])
@@ -162,7 +163,7 @@ def main():
     if a.mode == 'sft_fewshot':
         require_fewshot_manifest(a.data)
         extra = [str(a.sft_steps)]
-    if a.mode == 'sft_source10':
+    if a.mode in ('sft_source10', 'sft_source10_lora'):
         manifest = require_fewshot_manifest(a.data, SOURCE_DATASET, 10)
         source = json.loads(manifest.read_text(encoding='utf-8'))
         if (source.get('absolute_replay_required') != 'success_final'
@@ -170,6 +171,8 @@ def main():
                        for episode in source['episodes'])):
             raise ValueError('Source-10 SFT requires successful relative and absolute replay of every demonstration')
         extra = [str(a.sft_steps), str(manifest)]
+        if a.mode == 'sft_source10_lora':
+            extra.append(checked_sft_checkpoint(a, 'sft_source10', 1024))
     if a.mode == 'replay_absolute':
         extra = [str(require_fewshot_manifest(a.data))]
     if a.mode == 'sft_action_check':
