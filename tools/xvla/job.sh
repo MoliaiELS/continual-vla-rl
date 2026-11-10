@@ -59,6 +59,10 @@ case "$mode" in
  source_reset_sft)
    python -m xvla_rlinf.source_reset_solvability --audit "${4:?physics audit report}" \
      --checkpoint "${5:?audited Pt-SFT checkpoint}" ;;
+ benchmark_e1_deployed|benchmark_e1_online)
+   python -m xvla_rlinf.benchmark --model sft-fewshot --policy-path "${mode#benchmark_e1_}" \
+     --start-task "${4:?source task}" --task-count "${5:?task count}" --trials "${6:?trial count}" \
+     --start-trial "${7:?start trial}" --checkpoint "${8:?audited B0 checkpoint}" ;;
  alignment) python -m xvla_rlinf.smoke alignment ;;
  native_eval) python -m xvla_rlinf.entry --config-name native_eval_smoke ;;
  stochastic_eval) python -m xvla_rlinf.entry --config-name stochastic_eval_smoke ;;
@@ -129,19 +133,26 @@ PY
  ppo_pt|grpo_pt)
    export XVLA_INITIAL_SFT_CHECKPOINT="${4:?audited few-shot SFT actor checkpoint directory}"
    python -m xvla_rlinf.entry --config-name "${mode}_smoke" ;;
- ppo_source10|grpo_source10|ppo_source10_pool)
+ ppo_source10|grpo_source10|ppo_source10_pool|ppo_e2)
    export XVLA_INITIAL_SFT_CHECKPOINT="${4:?audited source-10 LoRA checkpoint}"
    rl_mode="${mode%%_source10*}"
+   if [[ "$mode" == ppo_e2 ]]; then rl_mode=ppo; fi
    env_count=2
    if [[ "$rl_mode" == grpo ]]; then env_count=4; fi
    pool_args=()
-   if [[ "$mode" == ppo_source10_pool ]]; then
+   if [[ "$mode" == ppo_source10_pool || "$mode" == ppo_e2 ]]; then
      env_count=4
-     pool_args=(runner.max_epochs=2 runner.max_steps=2 runner.save_interval=2 runner.val_check_interval=2
-                env.train.specific_reset_id=null '+env.train.task_id_filter=[0]'
+     pool_args=(env.train.specific_reset_id=null '+env.train.task_id_filter=[0]'
                 "+env.train.xvla_source_reset_pool.path=${5:?frozen reset pool}"
                 "+env.train.xvla_source_reset_pool.sha256=${6:?reset pool SHA256}"
                 "+env.train.xvla_source_reset_pool.mode=${7:?reset sampling mode}")
+     if [[ "$mode" == ppo_e2 ]]; then
+       pool_args+=(runner.max_epochs=256 runner.max_steps=256 runner.save_interval=-1
+                   runner.val_check_interval=-1 +runner.xvla_control_step_budget=25000
+                   env.train.video_cfg.save_video=false)
+     else
+       pool_args+=(runner.max_epochs=2 runner.max_steps=2 runner.save_interval=2 runner.val_check_interval=2)
+     fi
    fi
    python -m xvla_rlinf.entry --config-name "${rl_mode}_pt_smoke" \
      "runner.logger.experiment_name=$mode-smoke" actor.model.xvla.update_scope=lora_heads \
@@ -174,6 +185,23 @@ case "$mode" in
    python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$XVLA_RUN_DIR/${mode}-smoke/checkpoints/global_step_1/actor" ;;
  ppo_source10_pool)
    python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$XVLA_RUN_DIR/${mode}-smoke/checkpoints/global_step_2/actor" ;;
+ ppo_e2)
+   checkpoint="$(python - "$XVLA_RUN_DIR" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1]).resolve()
+data = json.loads((root / "control_step_budget.json").read_text())
+if data["state"] not in ("COMPLETE_VALID", "COMPLETE_NO_SIGNAL"):
+    raise RuntimeError("E2 did not reach its registered budget endpoint")
+checkpoint = Path(data["checkpoint_path"]).resolve()
+if not checkpoint.is_relative_to(root):
+    raise RuntimeError("E2 checkpoint escaped its Slurm output directory")
+print(checkpoint)
+PY
+   )"
+   python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$checkpoint" ;;
  sft_fewshot)
    python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$XVLA_RUN_DIR/sft_fewshot-smoke/checkpoints/global_step_${sft_steps}/actor" ;;
  sft_source10|sft_source10_lora)

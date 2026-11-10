@@ -44,6 +44,15 @@ class BenchmarkSubmissionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             submit.benchmark_settings(self.arguments(mode='ppo_source10', start_trial=10))
 
+    def test_e1_rejects_an_unfrozen_panel_or_checkpoint(self):
+        fields = dict(mode='benchmark_e1_online', start_task=0, task_count=1, start_trial=30, trials=10,
+                      checkpoint_job_id='19525', sft_steps=1024)
+        with patch.object(submit, 'checked_sft_checkpoint', return_value='audited'):
+            self.assertEqual(submit.benchmark_settings(self.arguments(**fields))['checkpoint'], 'audited')
+            for change in ({'start_trial': 40}, {'checkpoint_job_id': '19518'}):
+                with self.subTest(change=change), self.assertRaises(ValueError):
+                    submit.benchmark_settings(self.arguments(**(fields | change)))
+
     def test_sft_benchmark_requires_explicit_checked_checkpoint(self):
         with TemporaryDirectory() as directory:
             data = Path(directory)

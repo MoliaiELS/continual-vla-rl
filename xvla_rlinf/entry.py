@@ -21,7 +21,9 @@ def main(cfg):
     cfg=validate_cfg(cfg)
     from .rl_initialization import validate_rl_initialization
     validate_rl_initialization(cfg)
+    from .control_budget import control_budget_actor, control_budget_runner, validate_control_budget
     from .source_reset_pool import source_reset_worker, validate_source_reset_pool
+    budgeted = validate_control_budget(cfg)
     env_worker = source_reset_worker(EnvWorker) if validate_source_reset_pool(cfg) else EnvWorker
     print(OmegaConf.to_yaml(cfg,resolve=True),flush=True)
     cluster=Cluster(cluster_cfg=cfg.cluster)
@@ -35,9 +37,11 @@ def main(cfg):
         runner=EmbodiedEvalRunner(cfg,rollout,env)
     else:
         from .audit_workers import AuditedActor, AuditedRunner
-        actor=AuditedActor.create_group(cfg).launch(cluster,name=cfg.actor.group_name,
+        actor_worker = control_budget_actor(AuditedActor) if budgeted else AuditedActor
+        runner_type = control_budget_runner(AuditedRunner) if budgeted else AuditedRunner
+        actor=actor_worker.create_group(cfg).launch(cluster,name=cfg.actor.group_name,
                         placement_strategy=placement.get_strategy('actor'))
-        runner=AuditedRunner(cfg,actor,rollout,env)
+        runner=runner_type(cfg,actor,rollout,env)
     runner.init_workers()
     runner.run()
     print('XVLA_RLINF_RUNNER_FINISHED',flush=True)

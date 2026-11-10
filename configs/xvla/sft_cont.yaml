@@ -1,0 +1,31 @@
+defaults:
+  - _sft_fewshot_base
+  - _self_
+
+hydra:
+  searchpath:
+    - file://${oc.env:RLINF_RUNTIME}/examples/sft/config
+    - file://${oc.env:RLINF_RUNTIME}/examples/embodiment/config
+  run:
+    dir: .
+  output_subdir: null
+runner:
+  sft_cont_checkpoint: ${oc.env:XVLA_SFT_CONT_CHECKPOINT}
+  max_steps: 2048
+  max_epochs: -1
+  save_interval: 512
+  logger:
+    experiment_name: sft_cont
+data:
+  train_data_paths: ${oc.env:FYP_XVLA_DATA}/datasets/source-spatial-task0-10/manifest.json
+  manifest_requirements:
+    demonstrations: 10
+actor:
+  micro_batch_size: 4
+  global_batch_size: 4
+  model:
+    xvla:
+      update_scope: lora_heads
+      lora_rank: 8
+  optim:
+    total_training_steps: 2048

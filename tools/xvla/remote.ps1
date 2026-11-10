@@ -88,9 +88,10 @@ echo XVLA_DOWNLOAD_PID=`$!
   if ($Value -notmatch '^[a-z0-9_-]+$' -or $Gpus -notin @(0,1,2)) { throw 'Invalid X-VLA mode or GPU count' }
   $submitOptions=''
   $isSequenceDev=$Value -in @('benchmark_sft_sequence_dev','benchmark_rl_sequence_dev')
-  $isBenchmark=$isSequenceDev -or $Value -in @('benchmark_libero','benchmark_pt','benchmark_sft_smoke','benchmark_sft_fewshot','benchmark_sft_source10','benchmark_rl_source10')
-  $isPtRl=$Value -in @('ppo_pt','grpo_pt','ppo_source10','grpo_source10','ppo_source10_pool')
-  if ($Value -eq 'ppo_source10_pool') {
+  $isE1Panel=$Value -in @('benchmark_e1_deployed','benchmark_e1_online')
+  $isBenchmark=$isE1Panel -or $isSequenceDev -or $Value -in @('benchmark_libero','benchmark_pt','benchmark_sft_smoke','benchmark_sft_fewshot','benchmark_sft_source10','benchmark_rl_source10')
+  $isPtRl=$Value -in @('ppo_pt','grpo_pt','ppo_source10','grpo_source10','ppo_source10_pool','ppo_e2')
+  if ($Value -in @('ppo_source10_pool','ppo_e2')) {
    if (-not $ResetPool) { throw 'Source pool pilot requires -ResetPool' }
    $submitOptions += " --reset-pool $ResetPool"
   } elseif ($ResetPool) {
@@ -114,13 +115,13 @@ echo XVLA_DOWNLOAD_PID=`$!
   } elseif ($PSBoundParameters.ContainsKey('GpuModel')) {
    throw 'GPU model override applies only to benchmark and Pt few-shot pipeline modes'
   }
-  if ($isPtRl -or $isSequenceDev -or $Value -in @('benchmark_sft_smoke','benchmark_sft_fewshot','benchmark_sft_source10','benchmark_rl_source10','sft_source10_lora','sft_action_check','source_reset_sft')) {
+  if ($isPtRl -or $isSequenceDev -or $isE1Panel -or $Value -in @('benchmark_sft_smoke','benchmark_sft_fewshot','benchmark_sft_source10','benchmark_rl_source10','sft_source10_lora','sft_action_check','source_reset_sft')) {
    if (-not $CheckpointJobId) { throw "$Value requires -CheckpointJobId" }
    $submitOptions += " --checkpoint-job-id $CheckpointJobId"
   } elseif ($CheckpointJobId) {
    throw 'Checkpoint job ID requires an SFT benchmark or Pt RL mode'
   }
-  if ($isSourceSft -or $isPtRl -or $Value -in @('sft_fewshot','benchmark_sft_fewshot','sft_action_check','benchmark_sft_source10','benchmark_sft_sequence_dev','source_reset_sft')) {
+  if ($isSourceSft -or $isPtRl -or $isE1Panel -or $Value -in @('sft_fewshot','benchmark_sft_fewshot','sft_action_check','benchmark_sft_source10','benchmark_sft_sequence_dev','source_reset_sft')) {
    $submitOptions += " --sft-steps $SftSteps"
   } elseif ($PSBoundParameters.ContainsKey('SftSteps')) {
    throw 'SFT steps apply only to few-shot SFT and its consumers'

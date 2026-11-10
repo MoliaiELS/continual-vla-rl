@@ -13,9 +13,12 @@ BENCHMARK_MODELS = {
     'benchmark_rl_source10': 'rl-source10',
     'benchmark_sft_sequence_dev': 'sft-fewshot',
     'benchmark_rl_sequence_dev': 'rl-source10',
+    'benchmark_e1_deployed': 'sft-fewshot',
+    'benchmark_e1_online': 'sft-fewshot',
 }
 SEQUENCE_DEV_MODES = ('benchmark_sft_sequence_dev', 'benchmark_rl_sequence_dev')
-SOURCE_RL_MODES = ('ppo_source10', 'grpo_source10', 'ppo_source10_pool')
+E1_PANELS = {'benchmark_e1_deployed': (10, 20), 'benchmark_e1_online': (30, 10)}
+SOURCE_RL_MODES = ('ppo_source10', 'grpo_source10', 'ppo_source10_pool', 'ppo_e2')
 PT_RL_MODES = ('ppo_pt', 'grpo_pt', *SOURCE_RL_MODES)
 SOURCE_DATASET = Path('datasets/source-spatial-task0-10')
 CONVERSION_MODES = ('convert', 'convert_fewshot', 'convert_source10')
@@ -27,7 +30,7 @@ FEWSHOT_SFT_RUN = 'sft_fewshot-smoke'
 FEWSHOT_SFT_STEPS = (256, 1024)
 FEWSHOT_SFT_MODES = ('sft_fewshot', 'benchmark_sft_fewshot', 'sft_action_check', 'sft_source10',
                      'sft_source10_lora', 'benchmark_sft_source10', 'benchmark_sft_sequence_dev',
-                     'source_reset_sft', *PT_RL_MODES)
+                     'source_reset_sft', *E1_PANELS, *PT_RL_MODES)
 
 def discover_task0_source(data_root: Path):
     """Read only our project's raw-data tree and pinned HF download receipt."""
@@ -75,6 +78,12 @@ def benchmark_settings(args):
         raise ValueError('Benchmark shard must contain between 1 and 50 episodes')
     if args.mode in SEQUENCE_DEV_MODES and (args.start_task, args.task_count) != (1, 1):
         raise ValueError('Sequence development benchmark is restricted to Spatial task 1')
+    if args.mode in E1_PANELS and (args.start_task, args.task_count, args.start_trial, args.trials) != (
+        0, 1, *E1_PANELS[args.mode]
+    ):
+        raise ValueError('E1 benchmark must use its frozen task-0 panel')
+    if args.mode in E1_PANELS and (args.checkpoint_job_id, args.sft_steps) != ('19525', 1024):
+        raise ValueError('E1 benchmark must use the frozen B0 checkpoint')
 
     checkpoint = None
     if model == 'sft-smoke':
@@ -84,7 +93,7 @@ def benchmark_settings(args):
             raise ValueError('Source-10 RL development evaluation is restricted to Spatial task 0')
         checkpoint = checked_sft_checkpoint(args, 'ppo_source10-smoke', 1)
     elif model == 'sft-fewshot':
-        run = ('sft_source10' if args.mode in ('benchmark_sft_source10', 'benchmark_sft_sequence_dev')
+        run = ('sft_source10' if args.mode in ('benchmark_sft_source10', 'benchmark_sft_sequence_dev', *E1_PANELS)
                else FEWSHOT_SFT_RUN)
         if args.mode == 'benchmark_sft_source10' and (args.start_task, args.task_count) != (0, 1):
             raise ValueError('Source-10 development evaluation is restricted to Spatial task 0')
@@ -165,8 +174,10 @@ def main():
     a=p.parse_args()
     if (a.audit_job_id is not None) != (a.mode in ('source_reset_solvability', 'source_reset_sft')):
         raise ValueError('--audit-job-id is required only for source reset evaluation')
-    if (a.reset_pool is not None) != (a.mode == 'ppo_source10_pool'):
+    if (a.reset_pool is not None) != (a.mode in ('ppo_source10_pool', 'ppo_e2')):
         raise ValueError('--reset-pool is required only for the source pool pilot')
+    if a.mode == 'ppo_e2' and (a.checkpoint_job_id, a.sft_steps, a.gpu_model) != ('19525', 1024, '4090'):
+        raise ValueError('E2 requires frozen B0 checkpoint 19525/1024 and a single 4090')
     if a.mode == 'source_reset_audit' and a.gpus != 0:
         raise ValueError('Unrendered source reset audit requires --gpus 0')
     if a.mode not in ('unit','imports','source_reset_audit') and a.gpus!=1:
@@ -226,6 +237,8 @@ def main():
             plan = a.repo.resolve() / 'configs/xvla/source_pools' / f'{plan_name}.json'
             digest = hashlib.sha256(plan.read_bytes()).hexdigest()
             extra.extend((str(plan), digest, sampling))
+            if a.mode == 'ppo_e2':
+                extra.extend((a.reset_pool, a.partition))
     import fcntl
     a.data.mkdir(parents=True,exist_ok=True)
     with (a.data/'submit.lock').open('a') as lock:
@@ -256,8 +269,9 @@ def submit_locked(a,conversion,extra,benchmark=None,initial_sft=None):
     if a.gpus+allocated>2:
         raise RuntimeError(f'BLOCKED_GPU_BUDGET: requested={a.gpus}, own active/pending commitment={allocated}, cap=2; no job submitted')
     if a.mode not in ('unit','imports','source_reset_audit') and a.gpus==0:raise ValueError('Real model/rollout smoke requires explicit GPU allocation')
+    walltime = '04:00:00' if a.mode == 'ppo_e2' else '01:00:00'
     cmd=['sbatch','--parsable','--partition='+a.partition,'--exclude=4090node1','--nodes=1','--ntasks=1',
-         '--cpus-per-task=8','--time=01:00:00','--job-name=xvla-'+a.mode,
+         '--cpus-per-task=8','--time='+walltime,'--job-name=xvla-'+a.mode,
          '--output='+str(a.data/'logs/%j.out'),'--error='+str(a.data/'logs/%j.err')]
     gpu_model = a.gpu_model or '4090'
     if a.gpus:

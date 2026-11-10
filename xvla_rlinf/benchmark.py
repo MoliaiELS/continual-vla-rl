@@ -1,4 +1,4 @@
-"""Evaluate fixed, paired LIBERO-Spatial trials using the native X-VLA policy."""
+"""Evaluate fixed, paired LIBERO-Spatial trials using audited X-VLA policies."""
 from __future__ import annotations
 
 import argparse
@@ -27,6 +27,8 @@ MODEL_REVISIONS = {
 TRIAL_FIELDS = ("task_id", "trial_id", "environment_seed", "policy_seed")
 RL_MODEL = "rl-source10"
 CHECKPOINT_MODELS = ("sft-smoke", "sft-fewshot", RL_MODEL)
+ONLINE_HORIZON = 300
+TERMINAL_SEED_OFFSET = 1_000_000
 
 
 def build_trials(start_task: int, task_count: int, trials: int, *, start_trial: int = 0) -> list[dict]:
@@ -47,7 +49,7 @@ def build_trials(start_task: int, task_count: int, trials: int, *, start_trial: 
     ]
 
 
-def summarize(episodes: list[dict], plan: list[dict]) -> dict:
+def summarize(episodes: list[dict], plan: list[dict], *, horizon=HORIZON) -> dict:
     def identity(row):
         if any(type(row.get(field)) is not int for field in TRIAL_FIELDS):
             raise ValueError("Episode identity requires task, trial and both seeds")
@@ -64,7 +66,7 @@ def summarize(episodes: list[dict], plan: list[dict]) -> dict:
         steps = row.get("policy_env_steps")
         settling = row.get("settling_env_steps")
         if (type(row.get("success")) is not bool or type(steps) is not int
-                or not 1 <= steps <= HORIZON or type(settling) is not int or settling != SETTLING):
+                or not 1 <= steps <= horizon or type(settling) is not int or settling != SETTLING):
             raise ValueError(f"Invalid episode outcome or step counts: {key}")
         seen.add(key)
         per_task[row["task_id"]].append(row)
@@ -171,7 +173,7 @@ def _load_policy(model_name, checkpoint):
     return model, provenance
 
 
-def _make_environment(plan):
+def _make_environment(plan, *, horizon=HORIZON):
     from omegaconf import OmegaConf
     from rlinf.envs.sim.libero.libero_env import LiberoEnv
     from rlinf.envs.sim.libero.utils import get_benchmark_overridden
@@ -191,7 +193,7 @@ def _make_environment(plan):
         "task_suite_name": SUITE, "seed": first["environment_seed"], "group_size": 1, "is_eval": True,
         "specific_reset_id": offsets[first["task_id"]] + first["trial_id"], "use_fixed_reset_state_ids": True,
         "use_ordered_reset_state_ids": True, "auto_reset": False, "ignore_terminations": False,
-        "max_episode_steps": HORIZON, "max_steps_per_rollout_epoch": CHUNK * ((HORIZON + CHUNK - 1) // CHUNK),
+        "max_episode_steps": horizon, "max_steps_per_rollout_epoch": CHUNK * ((horizon + CHUNK - 1) // CHUNK),
         "num_steps_wait": SETTLING, "reset_gripper_open": False, "use_rel_reward": True, "reward_coef": 1.0,
         "xvla_absolute_control": True, "xvla_raw_observations": True, "xvla_measured_state": True,
         "xvla_history_reset": True, "xvla_strict_episodes": True,
@@ -201,7 +203,7 @@ def _make_environment(plan):
     return env, states, offsets
 
 
-def _run_episode(model, env, row, states, offsets):
+def _run_episode(model, env, row, states, offsets, *, horizon=HORIZON, policy_path="native"):
     import numpy as np
     import torch
 
@@ -220,10 +222,19 @@ def _run_episode(model, env, row, states, offsets):
     # Generate on CPU so the paired initial-noise stream is independent of
     # the allocated GPU's CUDA random-kernel launch geometry.
     generator = torch.Generator(device="cpu").manual_seed(row["policy_seed"])
+    terminal_generator = None
+    terminal_seed = None
+    if policy_path == "online":
+        terminal_seed = TERMINAL_SEED_OFFSET + row["policy_seed"]
+        terminal_generator = torch.Generator(device="cpu").manual_seed(terminal_seed)
+    terminal_noise = torch.zeros((1, CHUNK, 10), device="cuda:0") if policy_path == "deployed" else None
     count = 0
-    for query in range(1, (HORIZON + CHUNK - 1) // CHUNK + 1):
+    for query in range(1, (horizon + CHUNK - 1) // CHUNK + 1):
         noise = torch.randn((1, CHUNK, 20), generator=generator, dtype=torch.float32).to("cuda:0")
-        actions, _ = model.predict_action_batch(obs, mode="eval", compute_values=False, initial_noise=noise)
+        if terminal_generator is not None:
+            terminal_noise = torch.randn((1, CHUNK, 10), generator=terminal_generator).to("cuda:0")
+        actions, _ = model.predict_action_batch(obs, mode="eval", compute_values=False, initial_noise=noise,
+                                                terminal_noise=terminal_noise)
         if actions.shape != (1, CHUNK, 7) or not np.isfinite(actions).all():
             raise RuntimeError("Unexpected native action shape or non-finite actions")
         observations, _, terminated, truncated, infos = env.chunk_step(actions)
@@ -245,11 +256,12 @@ def _run_episode(model, env, row, states, offsets):
         raise RuntimeError("Episode did not terminate or truncate by the fixed horizon")
     settling = int(env._xvla_settling_steps[0]) - old_settling
     if (count != int(env._xvla_policy_steps[0]) - old_policy or settling != SETTLING
-            or count > HORIZON or (not success and count != HORIZON)):
+            or count > horizon or (not success and count != horizon)):
         raise RuntimeError("Execution masks and simulator step counters disagree")
     description = env.task_suite.get_task(task)
     initial_state = np.ascontiguousarray(states[task][trial])
     return {**row, "task_name": description.name, "language": description.language,
+            "policy_path": policy_path, "terminal_noise_seed": terminal_seed,
             "initial_state_sha256": hashlib.sha256(initial_state.tobytes()).hexdigest(),
             "status": "success" if success else "timeout", "success": success,
             "policy_env_steps": count, "settling_env_steps": settling, "policy_queries": query,
@@ -270,6 +282,7 @@ def main(argv=None):
     parser.add_argument("--start-trial", type=int, default=0, help="First initial-state index in each task")
     parser.add_argument("--trials", type=int, default=5)
     parser.add_argument("--checkpoint", type=Path, help="Independently audited SFT or RL actor checkpoint")
+    parser.add_argument("--policy-path", choices=("native", "deployed", "online"), default="native")
     args = parser.parse_args(argv)
     if (args.checkpoint is not None) != (args.model in CHECKPOINT_MODELS):
         parser.error("--checkpoint is required for SFT and RL models and applies only to them")
@@ -292,10 +305,16 @@ def main(argv=None):
     run_dir = Path(os.environ["XVLA_RUN_DIR"])
     summary_path = run_dir / "benchmark_summary.json"
     episodes = []
+    horizon = ONLINE_HORIZON if args.policy_path == "online" else HORIZON
+    native = args.policy_path == "native"
+    sampler = "native_eval" if native else "terminal_clean_gaussian_v1"
     record = {"schema_version": 1, "suite": SUITE, "model": args.model,
               "job_id": os.environ["SLURM_JOB_ID"], "trial_plan": plan,
-              "protocol": {"sampler": "native_eval", "precision": "fp32", "domain_id": DOMAIN,
-                           "chunk": CHUNK, "solver_steps": SOLVER_STEPS, "horizon": HORIZON,
+              "protocol": {"policy_path": args.policy_path, "sampler": sampler,
+                           "history": "native_history" if native else "measured_state",
+                           "terminal_noise": "sampled" if args.policy_path == "online" else "off",
+                           "precision": "fp32", "domain_id": DOMAIN,
+                           "chunk": CHUNK, "solver_steps": SOLVER_STEPS, "horizon": horizon,
                            "settling_steps": SETTLING, "concurrent_environments": 1,
                            "initial_noise_rng": "torch_cpu_per_trial"}}
     if summary_path.exists():
@@ -315,10 +334,14 @@ def main(argv=None):
             record["code_commit"] = subprocess.check_output(
                 ["git", "-C", str(repository), "rev-parse", "HEAD"], text=True).strip()
             model, record["checkpoint"] = _load_policy(args.model, args.checkpoint)
-            env, states, offsets = _make_environment(plan)
+            if not native:
+                model.xcfg.update(eval_sampler=sampler, eval_history_mode="measured_state")
+                record["protocol"]["terminal_std"] = model.sampler.std.tolist()
+            env, states, offsets = _make_environment(plan, horizon=horizon)
             try:
                 for row in plan:
-                    result = _run_episode(model, env, row, states, offsets)
+                    result = _run_episode(model, env, row, states, offsets, horizon=horizon,
+                                          policy_path=args.policy_path)
                     serialized = json.dumps(result, ensure_ascii=False)
                     journal.write(serialized + "\n")
                     journal.flush()
@@ -327,7 +350,7 @@ def main(argv=None):
             finally:
                 # LiberoEnv inherits gym.Env.close(), which does not close the subprocess.
                 env.env.close()
-            record.update(status="PASS", **summarize(episodes, plan))
+            record.update(status="PASS", **summarize(episodes, plan, horizon=horizon))
         except Exception as error:
             record.update(status="FAIL", complete=False, planned_episodes=len(plan),
                           completed_episodes=len(episodes), error_type=type(error).__name__, error=str(error))

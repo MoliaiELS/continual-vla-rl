@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import hashlib
 import logging
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -22,6 +23,13 @@ from rlinf.workers.sft.fsdp_vla_sft_worker import FSDPVlaSftWorker
 
 from . import register
 from .sft import build_xvla_sft_dataloader
+from .sft_continuation import SFT_CONT_CHECKPOINT_STEPS, validate_sft_cont_config
+
+
+class XVLAContSftRunner(SFTRunner):
+    def _save_checkpoint(self, is_best=False):
+        if self.global_step in SFT_CONT_CHECKPOINT_STEPS:
+            super()._save_checkpoint(is_best=is_best)
 
 
 class XVLASftWorker(FSDPVlaSftWorker):
@@ -32,6 +40,15 @@ class XVLASftWorker(FSDPVlaSftWorker):
 
     def model_provider_func(self):
         model = super().model_provider_func()
+        continuation = self.cfg.runner.get("sft_cont_checkpoint")
+        if continuation is not None:
+            from .sft_continuation import initialize_sft_continuation
+
+            self._xvla_continuation = initialize_sft_continuation(
+                model, self.cfg.actor.model, continuation,
+                manifest_sha256=self.data_config["manifest_sha256"],
+            )
+            return model
         checkpoint = self.cfg.runner.get("initial_prompt_checkpoint")
         if checkpoint is not None:
             if not isinstance(checkpoint, str) or not checkpoint.strip() or self.cfg.runner.get("resume_dir"):
@@ -93,6 +110,11 @@ class XVLASftWorker(FSDPVlaSftWorker):
         super().init_worker()
         self._xvla_audit=bool(self.cfg.runner.get('xvla_audit',True)) and self._world_size==1
         self._xvla_steps=0
+        if hasattr(self, "_xvla_continuation"):
+            if not self._xvla_audit or self.optimizer_steps != 0 or self.optimizer.state:
+                raise RuntimeError("SFT-cont requires a single audited rank and a fresh optimizer")
+            self._audit_write("sft_continuation", **self._xvla_continuation,
+                              optimizer_start_steps=self.optimizer_steps)
         if self._xvla_audit:
             self._xvla_initial=self._model_fingerprints()
             self._audit_write('initialized',parameter_and_buffer_fingerprints=self._xvla_initial,
@@ -113,6 +135,10 @@ class XVLASftWorker(FSDPVlaSftWorker):
             if not any(item['nonzero'] for item in gradients) or not all(item['finite'] for item in gradients):
                 raise RuntimeError('Real SFT backward did not yield finite nonzero trainable gradients')
         result=super().optimizer_step()
+        # RLinf counts an attempted step even when its gradient guard skips
+        # the update. Stop here so a skipped update cannot consume SFT-cont U.
+        if hasattr(self, "_xvla_continuation") and not math.isfinite(float(result[0])):
+            raise RuntimeError("Non-finite gradient skipped an SFT-cont optimizer update")
         if audit:
             after=self._model_fingerprints()
             changed=[key for key in self._xvla_initial if after[key]['sha256']!=self._xvla_initial[key]['sha256']]
@@ -173,6 +199,10 @@ class XVLASftWorker(FSDPVlaSftWorker):
         self._audit_write('data_resume',checkpoint=str(load_path),**state)
 
     def save_checkpoint(self, save_path, step=0):
+        if hasattr(self, "_xvla_continuation") and (
+            self.optimizer_steps != step or step not in SFT_CONT_CHECKPOINT_STEPS
+        ):
+            raise RuntimeError("SFT-cont checkpoint must match the actual optimizer milestone")
         super().save_checkpoint(save_path,step)
         self._save_resume_counters(save_path)
         if self._xvla_audit:
@@ -208,6 +238,10 @@ class XVLASftWorker(FSDPVlaSftWorker):
             evidence={'model_config':OmegaConf.to_container(self.cfg.actor.model,resolve=True),'digest':digest}
             if hasattr(self, "_xvla_prompt_warm_start"):
                 evidence["prompt_warm_start"] = self._xvla_prompt_warm_start
+            if hasattr(self, "_xvla_continuation"):
+                evidence["sft_continuation"] = {
+                    **self._xvla_continuation, "new_optimizer_steps": self.optimizer_steps,
+                }
             (Path(save_path)/'xvla_evidence.json').write_text(json.dumps(evidence,indent=2)+'\n')
 
 
@@ -232,6 +266,7 @@ def main(cfg):
     if cfg.runner.task_type != "sft" or cfg.actor.model.model_type != "xvla":
         raise ValueError("This entry only supports X-VLA supervised fine-tuning")
     cfg = validate_cfg(cfg)
+    continuation = validate_sft_cont_config(cfg)
     logging.info(json.dumps(OmegaConf.to_container(cfg, resolve=True), indent=2))
     cluster = Cluster(cluster_cfg=cfg.cluster)
     placement = HybridComponentPlacement(cfg, cluster).get_strategy("actor")
@@ -239,7 +274,10 @@ def main(cfg):
         raise ValueError("X-VLA SFT currently supports only the pinned FSDP/FSDP2 worker")
     actor = XVLASftWorker.create_group(cfg).launch(cluster, name=cfg.actor.group_name,
                                                  placement_strategy=placement)
-    runner = SFTRunner(cfg=cfg, actor=actor)
+    runner_type = XVLAContSftRunner if continuation else SFTRunner
+    runner = runner_type(cfg=cfg, actor=actor)
+    if continuation and runner.max_steps != SFT_CONT_CHECKPOINT_STEPS[-1]:
+        raise RuntimeError("SFT-cont runner did not resolve to its registered update budget")
     runner.init_workers()
     runner.run()
 

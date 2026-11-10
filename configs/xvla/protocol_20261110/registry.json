@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "protocol_id": "xvla-20261110",
+  "split_path": "configs/xvla/protocol_20261110/split.json",
+  "split_sha256": "fa4ad56a5fd7f5b08b9612b7fefa1b3e156d63feb0df1d8aa60522fe062ce651",
+  "data_paths_are_relative_to": "FYP_XVLA_DATA",
+  "runtime": {
+    "project_branch": "codex/xvla-integration",
+    "pre_protocol_project_commit": "614ff672b0eefd6de756258cf56b82f6ca18a73b",
+    "rlinf_submodule_commit": "1bf78980d9339cbc67497eddceb9a1e3a74e2acc",
+    "xvla_source_commit": "6c4ecfb8be458ae7c0c96094e4b0add4174f4fe2",
+    "pt_revision": "2toINF/X-VLA-Pt@c1c4a64a7e03ac5b95c468bf1578f3d03651b53b",
+    "reference_revision": "2toINF/X-VLA-Libero@129e71460678b7236cee6fc9707f09d9fa0c3590",
+    "environment": "xvla_rlinf",
+    "launcher": "tools/xvla/remote.ps1",
+    "max_user_running_plus_pending_gpus": 2,
+    "simulation_hz": 20,
+    "sft_interpolation_hz": 30
+  },
+  "common_start": {
+    "job_id": 19525,
+    "project_commit": "fc67287ed857c4a86073616ffa227d5277da0d40",
+    "actor_checkpoint": "runs/19525/sft_source10/checkpoints/global_step_1024/actor",
+    "actor_state_sha256": "b584a11131874fc5d1c190af5859c4fab61e8c18d7f9de5b186b8885e6977e2f",
+    "strict_reload_evidence": "runs/19525/sft_source10/checkpoints/global_step_1024/actor/checkpoint_check.json",
+    "manifest": "datasets/source-spatial-task0-10/manifest.json",
+    "manifest_sha256": "0a3d6d871939e3365cd8719e94f2c6946cf40a594643c579cc82f733cb245bd77",
+    "raw_demo_data_revision": "f13aa24a3da8c43c7225569f28c562979fa0e35a",
+    "raw_demo_file_sha256": "ff6f26121653c77280eb40a38773a74141c11a8509f3466058cb56dd2cc60ead",
+    "demo_ids": [46, 47, 18, 45, 8, 43, 44, 7, 12, 36],
+    "demonstrations": 10,
+    "action_frames": 885,
+    "effective_windows": 785,
+    "optimizer_steps_by_phase": [1024, 1024],
+    "second_phase_global_batch_size": 4,
+    "second_phase_gpu_hours": 0.203404,
+    "actor_parameter_scope": "rank-8 all-linear LoRA plus domain-3 prompt and action heads",
+    "changed_trainable_tensor_count": 537,
+    "trainable_tensor_evidence": "runs/19525/sft_worker_rank0.jsonl",
+    "normalization": {
+      "checkpoint_configuration_evidence": "runs/19525/sft_source10/checkpoints/global_step_1024/actor/xvla_evidence.json",
+      "data_and_window_evidence": "datasets/source-spatial-task0-10/manifest.json",
+      "status": "verify effective preprocessing and normalization in E1",
+      "update_from_heldout_allowed": false
+    }
+  },
+  "existing_evidence": {
+    "legacy_reference": {"job_id": 19443, "successes": 46, "episodes": 50},
+    "legacy_pt": {"job_id": 19444, "successes": 0, "episodes": 50},
+    "B0_native_source_dev": [
+      {"job_id": 19528, "trial_ids_inclusive": [0, 9], "successes": 9, "episodes": 10},
+      {"job_id": 19532, "trial_ids_inclusive": [10, 29], "successes": 16, "episodes": 20}
+    ],
+    "ppo_single_update": {
+      "job_id": 19531,
+      "actual_policy_control_steps": 136,
+      "actual_settling_steps": 20,
+      "scope": "single reset trial 0; engineering qualification"
+    },
+    "ppo_standard_pool_smokes": [
+      {"condition": "B1", "job_id": 19535, "actual_policy_control_steps": 573, "actual_settling_steps": 80, "gpu_hours": 0.123603, "successes": 8, "episodes": 8},
+      {"condition": "B2", "job_id": 19537, "actual_policy_control_steps": 570, "actual_settling_steps": 80, "gpu_hours": 0.127555, "successes": 8, "episodes": 8},
+      {"condition": "M", "job_id": 19538, "actual_policy_control_steps": 568, "actual_settling_steps": 80, "gpu_hours": 0.122195, "successes": 8, "episodes": 8}
+    ],
+    "source_geometry_development": {
+      "physical_screen_job_id": 19534,
+      "expert_solvability_job_id": 19536,
+      "B0_native_policy_job_id": 19541,
+      "physics_pass_and_reference_solved_ids": [30, 32, 33, 34, 35, 36, 37, 38, 39],
+      "physics_rejected_ids": [31],
+      "B0_native_shifted_failure_ids": [39],
+      "role": "development only",
+      "terminal_gaussian_training_signal_status": "not_yet_measured"
+    },
+    "sequence_preliminary": {
+      "B_source_only_sft_eval_job_id": 19539,
+      "B_source_only_ppo_eval_job_id": 19540,
+      "successes_in_each": 0,
+      "episodes_in_each": 10,
+      "scope": "B before any B-specific updates from the old A-only start; no Cseq or NBT"
+    }
+  },
+  "proposed_budgets_before_pilot_lock": {
+    "e2_ppo_policy_control_steps_per_condition": 25000,
+    "e3_ppo_policy_control_steps_per_condition_and_seed": 200000,
+    "e3_ppo_seeds_per_condition": 3,
+    "e3_ppo_source_dev_policy_step_nodes": [0, 50000, 100000, 200000],
+    "sft_cont_optimizer_steps_per_seed": 2048,
+    "sft_cont_checkpoint_optimizer_steps": [512, 1024, 2048],
+    "sft_cont_seeds": 3,
+    "raw_pt_ppo_diagnostic_total_policy_control_step_cap": 50000,
+    "cseq_joint_warm_start_demos_per_task": 10,
+    "sequence_pilot_policy_steps_per_task": 25000
+  },
+  "runs": [
+    {"run_id": "E0-split-and-registry", "phase": "E0", "status": "COMPLETE_VALID", "depends_on": [], "evidence": ["configs/xvla/protocol_20261110/split.json", "configs/xvla/protocol_20261110/registry.json"]},
+    {"run_id": "E1-B0-native-source-dev", "phase": "E1", "status": "COMPLETE_VALID", "depends_on": ["E0-split-and-registry"], "job_ids": [19528, 19532], "evidence": ["runs/19528/benchmark_episodes.jsonl", "runs/19532/benchmark_episodes.jsonl"]},
+    {"run_id": "E1-B0-deployed-source-dev", "phase": "E1", "status": "READY", "depends_on": ["E0-split-and-registry"], "job_ids": []},
+    {"run_id": "E1-source-training-signal", "phase": "E1", "status": "READY", "depends_on": ["E0-split-and-registry"], "job_ids": [], "scope": "A standard training candidates 30-39, online exploration settings"},
+    {"run_id": "E1-source-physical-layout-audit", "phase": "E1", "status": "PENDING", "depends_on": ["E0-split-and-registry"], "job_ids": [19534, 19536, 19541], "remaining": "Check demo/train/dev/test physical overlap; validate or expand the independent source test panel without viewing policy outcomes"},
+    {"run_id": "E2-B1-pilot", "phase": "E2", "status": "PENDING", "depends_on": ["E1-B0-deployed-source-dev", "E1-source-training-signal", "E1-source-physical-layout-audit"], "job_ids": [], "prior_smoke_job_id": 19535},
+    {"run_id": "E2-B2-pilot", "phase": "E2", "status": "PENDING", "depends_on": ["E2-B1-pilot"], "job_ids": [], "prior_smoke_job_id": 19537},
+    {"run_id": "E2-M-pilot", "phase": "E2", "status": "PENDING", "depends_on": ["E2-B2-pilot"], "job_ids": [], "prior_smoke_job_id": 19538},
+    {"run_id": "E3-SFT-cont", "phase": "E3", "status": "PENDING", "depends_on": ["E1-B0-deployed-source-dev", "E2-M-pilot"], "job_ids": []},
+    {"run_id": "E3-formal-PPO", "phase": "E3", "status": "PENDING", "depends_on": ["E2-B1-pilot", "E2-B2-pilot", "E2-M-pilot"], "job_ids": []},
+    {"run_id": "E3-final-H", "phase": "E3", "status": "SEALED", "depends_on": ["E3-SFT-cont", "E3-formal-PPO"], "job_ids": []},
+    {"run_id": "E4-Cseq", "phase": "E4", "status": "PENDING", "depends_on": ["E3-final-H"], "job_ids": []},
+    {"run_id": "E4-AB-sequence-pilot", "phase": "E4", "status": "PENDING", "depends_on": ["E4-Cseq"], "job_ids": []},
+    {"run_id": "E4-seq-and-joint", "phase": "E4", "status": "PENDING", "depends_on": ["E4-AB-sequence-pilot"], "job_ids": []},
+    {"run_id": "E5-raw-Pt-PPO", "phase": "E5", "status": "CONDITIONAL", "depends_on": [], "job_ids": [], "critical_path": false}
+  ]
+}
