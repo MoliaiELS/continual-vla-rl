@@ -34,7 +34,15 @@ switch ($Command) {
    throw 'E2 start requires the deployed, online and physical E1 job IDs'
   }
   Invoke-XRemote @"
-'$($settings.CondaRoot)/envs/vla_budget_rl/bin/python' '$snapshot/tools/xvla/e2_dispatch.py' start --repo '$snapshot' --data '$data' --partition '$($settings.Partition)' --deployed-job-id '$DeployedJobId' --online-job-id '$OnlineJobId' --physical-job-id '$AuditJobId'
+python='$($settings.CondaRoot)/envs/vla_budget_rl/bin/python'
+repo='$snapshot'
+state='$data/protocol_20261110/e2_dispatch.json'
+if [[ -f "`$state" ]]; then
+  commit=`$("`$python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "`$state")
+  [[ "`$commit" =~ ^[a-f0-9]{40}`$ ]]
+  repo='$($settings.RunCodeRoot)'/"`$commit"
+fi
+"`$python" "`$repo/tools/xvla/e2_dispatch.py" start --repo "`$repo" --data '$data' --partition '$($settings.Partition)' --deployed-job-id '$DeployedJobId' --online-job-id '$OnlineJobId' --physical-job-id '$AuditJobId'
 "@
  }
  'e2-status' {
