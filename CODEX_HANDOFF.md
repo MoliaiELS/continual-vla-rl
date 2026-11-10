@@ -2,6 +2,8 @@
 
 新对话先读 [X-VLA 部署与实验进度](docs/experiment-progress-20261104.md#x-vla-部署与实验进度)，其中汇总了目标、实测结果和当前接手点。
 
+Pt 源任务训练的当前方案及新增作业证据见 [X-VLA-Pt 源任务实验](docs/xvla_pt_source_experiment.md)。毕设现行方向是单源任务的初态覆盖与组合迁移，原多任务回放方案已归档。
+
 2026-11-08 开始实际接入。此前仓库没有 CODEX_HANDOFF.md，本文件新增以保存实施状态。
 
 - 当前分支 `codex/xvla-integration`，启动时 HEAD `bdaa3568`，dirty status 为空，无既有 submodule 或 X-VLA adapter。用户原有提交全部保留。

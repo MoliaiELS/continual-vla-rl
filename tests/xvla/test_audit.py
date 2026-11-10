@@ -27,6 +27,7 @@ class AuditTests(unittest.TestCase):
         from torch import nn
         module = self.module()
         actor = object.__new__(module.AuditedActor)
+        actor.cfg = SimpleNamespace(algorithm={})
         actor.model = nn.Module()
         actor.model.core = nn.Module()
         actor.model.core.transformer = nn.Linear(2, 2)
