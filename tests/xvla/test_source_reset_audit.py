@@ -24,10 +24,15 @@ class SourceResetAuditTests(unittest.TestCase):
         original = snapshot(0.08)
         moved = snapshot(0.09)
         baseline = {"unmodified": original, "before_settling": original, "after_settling": original,
-                    "success_during_reset": False}
+                    "bowl_settling_delta_xyz_m": [0.0, 0.0, -0.07], "success_during_reset": False}
         perturbed = {"unmodified": original, "before_settling": moved, "after_settling": moved,
-                     "bowl_settling_delta_xyz_m": [0.0, 0.0, 0.0], "success_during_reset": False}
+                     "bowl_settling_delta_xyz_m": [0.0, 0.0, -0.07], "success_during_reset": False}
         self.assertEqual(_screen_perturbation(baseline, perturbed, 0.01), [])
+        perturbed["bowl_settling_delta_xyz_m"][0] = 0.01
+        self.assertEqual(_screen_perturbation(baseline, perturbed, 0.01), [
+            "extra_bowl_drift_during_settling",
+        ])
+        perturbed["bowl_settling_delta_xyz_m"][0] = 0.0
         perturbed["after_settling"] = snapshot(0.08, [{"other_geom": "g", "other_object": "plate_1"}])
         self.assertCountEqual(_screen_perturbation(baseline, perturbed, 0.01), [
             "bowl_contact_with_tracked_object", "new_bowl_contact_geometry", "requested_shift_not_retained",

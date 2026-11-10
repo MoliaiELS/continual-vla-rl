@@ -38,6 +38,12 @@ class BenchmarkSubmissionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             submit.benchmark_settings(self.arguments(mode='grpo_stress', gpu_model='3090'))
 
+    def test_benchmark_records_absolute_start_trial(self):
+        settings = submit.benchmark_settings(self.arguments(task_count=1, start_trial=10, trials=20))
+        self.assertEqual((settings['start_trial'], settings['trials']), (10, 20))
+        with self.assertRaises(ValueError):
+            submit.benchmark_settings(self.arguments(mode='ppo_source10', start_trial=10))
+
     def test_sft_benchmark_requires_explicit_checked_checkpoint(self):
         with TemporaryDirectory() as directory:
             data = Path(directory)

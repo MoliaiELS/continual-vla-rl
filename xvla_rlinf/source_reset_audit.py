@@ -129,7 +129,10 @@ def _screen_perturbation(baseline, perturbed, offset):
     before = perturbed["before_settling"]
     after = perturbed["after_settling"]
     baseline_after = baseline["after_settling"]
-    delta = np.asarray(perturbed["bowl_settling_delta_xyz_m"])
+    # Bundled starts can fall to the tabletop during ordinary settling.
+    # Screen displacement caused by the intervention, above paired baseline.
+    extra_delta = (np.asarray(perturbed["bowl_settling_delta_xyz_m"])
+                   - np.asarray(baseline["bowl_settling_delta_xyz_m"]))
     errors = []
     if baseline["unmodified"] != perturbed["unmodified"]:
         errors.append("paired_pre_shift_reset_differs")
@@ -146,8 +149,8 @@ def _screen_perturbation(baseline, perturbed, offset):
     if any(contact["other_geom"] not in expected_contacts for snapshot in (before, after)
            for contact in snapshot["bowl_contacts"]):
         errors.append("new_bowl_contact_geometry")
-    if np.linalg.norm(delta[:2]) > 0.006 or abs(delta[2]) > 0.02:
-        errors.append("bowl_drift_during_settling")
+    if np.linalg.norm(extra_delta[:2]) > 0.006 or abs(extra_delta[2]) > 0.02:
+        errors.append("extra_bowl_drift_during_settling")
     if abs(after["object_positions_m"][BOWL][2] - baseline_after["object_positions_m"][BOWL][2]) > 0.01:
         errors.append("different_settled_bowl_height")
     if after["bowl_linear_speed_m_per_s"] > 0.05:

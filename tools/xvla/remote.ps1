@@ -9,7 +9,8 @@ param(
     [ValidateRange(0,499)][int]$StartTrial=0,
     [ValidateRange(1,50)][int]$Trials=5,
     [ValidatePattern('^[0-9]+$')][string]$CheckpointJobId,
-    [ValidateSet('256','1024')][string]$SftSteps='256'
+    [ValidateSet('256','1024')][string]$SftSteps='256',
+    [ValidateSet('reference','expanded','stratified')][string]$ResetPool
 )
 $ErrorActionPreference='Stop'
 $OutputEncoding=[Text.UTF8Encoding]::new($false)
@@ -86,7 +87,13 @@ echo XVLA_DOWNLOAD_PID=`$!
   if ($Value -notmatch '^[a-z0-9_-]+$' -or $Gpus -notin @(0,1,2)) { throw 'Invalid X-VLA mode or GPU count' }
   $submitOptions=''
   $isBenchmark=$Value -in @('benchmark_libero','benchmark_pt','benchmark_sft_smoke','benchmark_sft_fewshot','benchmark_sft_source10','benchmark_rl_source10')
-  $isPtRl=$Value -in @('ppo_pt','grpo_pt','ppo_source10','grpo_source10')
+  $isPtRl=$Value -in @('ppo_pt','grpo_pt','ppo_source10','grpo_source10','ppo_source10_pool')
+  if ($Value -eq 'ppo_source10_pool') {
+   if (-not $ResetPool) { throw 'Source pool pilot requires -ResetPool' }
+   $submitOptions += " --reset-pool $ResetPool"
+  } elseif ($ResetPool) {
+   throw '-ResetPool applies only to the source pool pilot'
+  }
   if ($isBenchmark) {
    $submitOptions += " --start-task $StartTask --task-count $TaskCount --start-trial $StartTrial --trials $Trials"
   } elseif ($StartTask -ne 0 -or $TaskCount -ne 10 -or $StartTrial -ne 0 -or $Trials -ne 5) {

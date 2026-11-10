@@ -1,5 +1,6 @@
 """Submit bounded X-VLA jobs within the existing two-GPU user budget."""
 import argparse,json,os,re,subprocess
+import hashlib
 from pathlib import Path
 
 TASK0_HDF5='pick_up_the_black_bowl_between_the_plate_and_the_ramekin_and_place_it_on_the_plate_demo.hdf5'
@@ -11,7 +12,7 @@ BENCHMARK_MODELS = {
     'benchmark_sft_source10': 'sft-fewshot',
     'benchmark_rl_source10': 'rl-source10',
 }
-SOURCE_RL_MODES = ('ppo_source10', 'grpo_source10')
+SOURCE_RL_MODES = ('ppo_source10', 'grpo_source10', 'ppo_source10_pool')
 PT_RL_MODES = ('ppo_pt', 'grpo_pt', *SOURCE_RL_MODES)
 SOURCE_DATASET = Path('datasets/source-spatial-task0-10')
 CONVERSION_MODES = ('convert', 'convert_fewshot', 'convert_source10')
@@ -144,11 +145,14 @@ def main():
     p.add_argument('--start-trial', type=int, default=0)
     p.add_argument('--trials', type=int, default=5)
     p.add_argument('--checkpoint-job-id')
+    p.add_argument('--reset-pool', choices=('reference', 'expanded', 'stratified'))
     p.add_argument('--sft-steps', type=int, choices=FEWSHOT_SFT_STEPS, default=FEWSHOT_SFT_STEPS[0])
     p.add_argument('--convert-output',type=Path)
     p.add_argument('--convert-demonstrations',type=int,choices=[1,2])
     p.add_argument('--seed',type=int,default=1234)
     a=p.parse_args()
+    if (a.reset_pool is not None) != (a.mode == 'ppo_source10_pool'):
+        raise ValueError('--reset-pool is required only for the source pool pilot')
     if a.mode == 'source_reset_audit' and a.gpus != 0:
         raise ValueError('Unrendered source reset audit requires --gpus 0')
     if a.mode not in ('unit','imports','source_reset_audit') and a.gpus!=1:
@@ -193,6 +197,12 @@ def main():
         checkpoint = checked_sft_checkpoint(a, run, a.sft_steps)
         initial_sft = {'checkpoint_job_id': a.checkpoint_job_id, 'checkpoint': checkpoint, 'sft_steps': a.sft_steps}
         extra = [checkpoint]
+        if a.reset_pool is not None:
+            sampling = 'stratified' if a.reset_pool == 'stratified' else 'uniform'
+            plan_name = 'expanded' if a.reset_pool == 'stratified' else a.reset_pool
+            plan = a.repo.resolve() / 'configs/xvla/source_pools' / f'{plan_name}.json'
+            digest = hashlib.sha256(plan.read_bytes()).hexdigest()
+            extra.extend((str(plan), digest, sampling))
     import fcntl
     a.data.mkdir(parents=True,exist_ok=True)
     with (a.data/'submit.lock').open('a') as lock:
