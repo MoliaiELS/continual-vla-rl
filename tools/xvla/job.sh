@@ -68,6 +68,9 @@ case "$mode" in
      --start-trial "${7:?start trial}" --checkpoint "${8:?audited B0 checkpoint}" ;;
  benchmark_protocol_dev)
    python "$repo/tools/xvla/protocol_dev.py" --plan "${4:?audited paired source development plan}" ;;
+ benchmark_protocol_final)
+   python "$repo/tools/xvla/final_panel.py" evaluate --plan "${4:?locked H plan}" \
+     --plan-sha256 "${5:?locked H plan digest}" --index "${6:?H policy index}" ;;
  alignment) python -m xvla_rlinf.smoke alignment ;;
  native_eval) python -m xvla_rlinf.entry --config-name native_eval_smoke ;;
  stochastic_eval) python -m xvla_rlinf.entry --config-name stochastic_eval_smoke ;;

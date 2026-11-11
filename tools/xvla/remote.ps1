@@ -1,5 +1,5 @@
 param(
-    [Parameter(Position=0)][ValidateSet('audit','sync','bootstrap','download','submit','status','logs','session','e2-start','e2-status','e3-start','e3-status')][string]$Command='audit',
+    [Parameter(Position=0)][ValidateSet('audit','sync','bootstrap','download','submit','status','logs','session','e2-start','e2-status','e3-start','e3-status','final-submit')][string]$Command='audit',
     [Parameter(Position=1)][string]$Value='unit',
     [ValidateSet('libero','pt')][string]$Model='libero',
     [int]$Gpus=1,
@@ -68,6 +68,19 @@ fi
  }
  'e3-status' {
   Invoke-XRemote "cat '$data/protocol_20261110/e3_dispatch.json'"
+ }
+ 'final-submit' {
+  Invoke-XRemote @"
+python='$($settings.CondaRoot)/envs/vla_budget_rl/bin/python'
+repo='$snapshot'
+plan='$data/protocol_20261110/final_h_plan.json'
+if [[ -f "`$plan" ]]; then
+  commit=`$("`$python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["evaluation_commit"])' "`$plan")
+  [[ "`$commit" =~ ^[a-f0-9]{40}`$ ]]
+  repo='$($settings.RunCodeRoot)'/"`$commit"
+fi
+"`$python" "`$repo/tools/xvla/final_panel.py" submit --repo "`$repo" --data '$data' --partition '$($settings.Partition)'
+"@
  }
  'session' {
   # One persistent connection for serial diagnostics during unstable VPN links.

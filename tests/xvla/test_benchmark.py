@@ -2,8 +2,11 @@
 
 import unittest
 from pathlib import Path
+from contextlib import redirect_stderr
+from io import StringIO
+from unittest.mock import patch
 
-from xvla_rlinf.benchmark import _checkpoint_layout, build_trials, summarize
+from xvla_rlinf.benchmark import _checkpoint_layout, _locked_trial_plan, _validate_reset_states, build_trials, main, summarize
 
 
 def completed(trial, *, success, steps):
@@ -62,6 +65,33 @@ class BenchmarkAccountingTests(unittest.TestCase):
         for start_trial in (-1, True, 1.5):
             with self.subTest(start_trial=start_trial), self.assertRaises(ValueError):
                 build_trials(0, 1, 20, start_trial=start_trial)
+
+
+class LockedTrialPlanTests(unittest.TestCase):
+    def test_repeats_the_frozen_state_with_distinct_episode_seeds(self):
+        first = {"task_id": 0, "trial_id": 5, "environment_seed": 147, "policy_seed": 10005,
+                 "initial_state_sha256": "b" * 64, "repetition_index": 0}
+        second = {**first, "environment_seed": 1147, "policy_seed": 11005, "repetition_index": 1}
+        plan = _locked_trial_plan([first, second])
+        self.assertEqual(plan, [first, second])
+        episodes = [completed(row, success=True, steps=120) for row in plan]
+        self.assertEqual(summarize(episodes, plan)["successes"], 2)
+        for bad_plan in ([first, first], [{**first, "initial_state_sha256": ""}], [first] * 51):
+            with self.subTest(bad_plan=bad_plan), self.assertRaises(ValueError):
+                _locked_trial_plan(bad_plan)
+
+    def test_detects_mismatch_in_runtime_reset_archive(self):
+        row = {"task_id": 0, "trial_id": 0, "initial_state_sha256": "a" * 64}
+        with patch("xvla_rlinf.benchmark._initial_state_sha256", return_value="b" * 64) as digest:
+            with self.assertRaisesRegex(ValueError, "Runtime initial-state SHA256 differs"):
+                _validate_reset_states([row], [["reset-state"]])
+            digest.assert_called_once_with("reset-state")
+
+    def test_rejects_shard_flags_with_locked_plan(self):
+        stderr = StringIO()
+        with redirect_stderr(stderr), self.assertRaises(SystemExit):
+            main(["--model", "pt", "--start-trial", "0"], trial_plan=[])
+        self.assertIn("cannot be combined with benchmark shard flags", stderr.getvalue())
 
 
 class BenchmarkCheckpointLayoutTests(unittest.TestCase):

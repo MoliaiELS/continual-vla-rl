@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 import time
@@ -49,18 +50,38 @@ def build_trials(start_task: int, task_count: int, trials: int, *, start_trial: 
     ]
 
 
-def summarize(episodes: list[dict], plan: list[dict], *, horizon=HORIZON) -> dict:
-    def identity(row):
-        if any(type(row.get(field)) is not int for field in TRIAL_FIELDS):
-            raise ValueError("Episode identity requires task, trial and both seeds")
-        return tuple(row[field] for field in TRIAL_FIELDS)
+def _trial_identity(row):
+    if any(type(row.get(field)) is not int for field in TRIAL_FIELDS):
+        raise ValueError("Episode identity requires task, trial and both seeds")
+    return tuple(row[field] for field in TRIAL_FIELDS)
 
-    expected = {identity(row) for row in plan}
+
+def _locked_trial_plan(trial_plan):
+    if not 1 <= len(trial_plan) <= MAX_TRIALS_PER_JOB:
+        raise ValueError(f"Evaluate between 1 and {MAX_TRIALS_PER_JOB} episodes per job")
+    plan = [dict(row) for row in trial_plan]
+    identities = set()
+    for row in plan:
+        identity = _trial_identity(row)
+        task, trial, environment_seed, policy_seed = identity
+        if not 0 <= task < TASKS or min(trial, environment_seed, policy_seed) < 0:
+            raise ValueError("Trial plan contains an out-of-range task, trial or seed")
+        expected = row.get("initial_state_sha256")
+        if not isinstance(expected, str) or not re.fullmatch("[0-9a-f]{64}", expected):
+            raise ValueError("Each locked trial requires its frozen initial-state SHA256")
+        if identity in identities:
+            raise ValueError("Trial plan repeats an episode identity")
+        identities.add(identity)
+    return plan
+
+
+def summarize(episodes: list[dict], plan: list[dict], *, horizon=HORIZON) -> dict:
+    expected = {_trial_identity(row) for row in plan}
     if not expected or len(expected) != len(plan):
         raise ValueError("Trial plan must be nonempty and unique")
     seen, per_task = set(), defaultdict(list)
     for row in episodes:
-        key = identity(row)
+        key = _trial_identity(row)
         if key in seen or key not in expected:
             raise ValueError(f"Duplicate or unexpected trial identity: {key}")
         steps = row.get("policy_env_steps")
@@ -173,6 +194,22 @@ def _load_policy(model_name, checkpoint):
     return model, provenance
 
 
+def _initial_state_sha256(state):
+    import numpy as np
+
+    return hashlib.sha256(np.ascontiguousarray(state).tobytes()).hexdigest()
+
+
+def _validate_reset_states(plan, states):
+    for row in plan:
+        task, trial = row["task_id"], row["trial_id"]
+        if trial >= len(states[task]):
+            raise ValueError(f"Requested trial exceeds available initial states: {row}")
+        expected = row.get("initial_state_sha256")
+        if expected is not None and _initial_state_sha256(states[task][trial]) != expected:
+            raise ValueError(f"Runtime initial-state SHA256 differs for task {task} trial {trial}")
+
+
 def _make_environment(plan, *, horizon=HORIZON):
     from omegaconf import OmegaConf
     from rlinf.envs.sim.libero.libero_env import LiberoEnv
@@ -185,9 +222,7 @@ def _make_environment(plan, *, horizon=HORIZON):
         raise RuntimeError("Unexpected task count for the pinned Spatial benchmark")
     states = [suite.get_task_init_states(task) for task in range(TASKS)]
     offsets = [sum(len(previous) for previous in states[:task]) for task in range(TASKS)]
-    for row in plan:
-        if row["trial_id"] >= len(states[row["task_id"]]):
-            raise ValueError(f"Requested trial exceeds available initial states: {row}")
+    _validate_reset_states(plan, states)
     first = plan[0]
     config = OmegaConf.create({
         "task_suite_name": SUITE, "seed": first["environment_seed"], "group_size": 1, "is_eval": True,
@@ -259,10 +294,9 @@ def _run_episode(model, env, row, states, offsets, *, horizon=HORIZON, policy_pa
             or count > horizon or (not success and count != horizon)):
         raise RuntimeError("Execution masks and simulator step counters disagree")
     description = env.task_suite.get_task(task)
-    initial_state = np.ascontiguousarray(states[task][trial])
     return {**row, "task_name": description.name, "language": description.language,
             "policy_path": policy_path, "terminal_noise_seed": terminal_seed,
-            "initial_state_sha256": hashlib.sha256(initial_state.tobytes()).hexdigest(),
+            "initial_state_sha256": _initial_state_sha256(states[task][trial]),
             "status": "success" if success else "timeout", "success": success,
             "policy_env_steps": count, "settling_env_steps": settling, "policy_queries": query,
             "post_done_policy_steps": 0, "elapsed_seconds": time.monotonic() - started}
@@ -274,7 +308,7 @@ def _write_summary(path, record):
     temporary.replace(path)
 
 
-def main(argv=None):
+def main(argv=None, *, trial_plan=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", choices=("libero", "pt", *CHECKPOINT_MODELS), required=True)
     parser.add_argument("--start-task", type=int, default=0)
@@ -284,13 +318,20 @@ def main(argv=None):
     parser.add_argument("--checkpoint", type=Path, help="Independently audited SFT or RL actor checkpoint")
     parser.add_argument("--expected-checkpoint-sha256", help="Required audited model-state digest for the panel")
     parser.add_argument("--policy-path", choices=("native", "deployed", "online"), default="native")
+    if trial_plan is not None:
+        parser.set_defaults(start_task=None, task_count=None, start_trial=None, trials=None)
     args = parser.parse_args(argv)
     if (args.checkpoint is not None) != (args.model in CHECKPOINT_MODELS):
         parser.error("--checkpoint is required for SFT and RL models and applies only to them")
     if args.expected_checkpoint_sha256 is not None and args.checkpoint is None:
         parser.error("--expected-checkpoint-sha256 requires --checkpoint")
     try:
-        plan = build_trials(args.start_task, args.task_count, args.trials, start_trial=args.start_trial)
+        if trial_plan is None:
+            plan = build_trials(args.start_task, args.task_count, args.trials, start_trial=args.start_trial)
+        else:
+            if any(value is not None for value in (args.start_task, args.task_count, args.start_trial, args.trials)):
+                raise ValueError("A locked trial plan cannot be combined with benchmark shard flags")
+            plan = _locked_trial_plan(trial_plan)
     except ValueError as error:
         parser.error(str(error))
 
