@@ -1,18 +1,32 @@
 """Stop a synchronous source-pool PPO run at its actual control-step budget."""
 from __future__ import annotations
 
+from collections.abc import Sequence
 import json
 import os
 from pathlib import Path
+import random
+import re
+
+
+FORMAL_MILESTONES = (50_000, 100_000, 200_000)
+FORMAL_SEEDS = (101, 202, 303)
 
 
 def validate_control_budget(cfg):
-    budget = cfg.runner.get("xvla_control_step_budget")
+    runner = cfg.runner
+    budget = runner.get("xvla_control_step_budget")
+    milestones = runner.get("xvla_control_step_milestones")
+    seed = runner.get("xvla_training_seed")
+    if milestones is not None or seed is not None:
+        if (not isinstance(milestones, Sequence) or tuple(milestones) != FORMAL_MILESTONES
+                or any(type(value) is not int for value in milestones)
+                or budget != FORMAL_MILESTONES[-1] or type(seed) is not int or seed not in FORMAL_SEEDS):
+            raise ValueError("Formal PPO requires the registered 50k/100k/200k milestones and a registered seed")
     if budget is None:
         return False
     if type(budget) is not int or budget < 1:
         raise ValueError("xvla_control_step_budget must be a positive integer")
-    runner = cfg.runner
     train = cfg.env.train
     if (runner.get("only_eval") or runner.get("resume_dir") or runner.get("use_training_pipeline")
             or runner.get("overlap_env_bootstrap") or runner.get("enable_decoupled_mode")
@@ -23,11 +37,11 @@ def validate_control_budget(cfg):
     if not (0 < runner.max_steps <= runner.max_epochs):
         raise ValueError("Control-step budget requires a positive bounded cycle cap in max_steps and max_epochs")
     if runner.save_interval > 0 or runner.val_check_interval > 0:
-        raise ValueError("Use the budget checkpoint and independent evaluation for a control-step pilot")
+        raise ValueError("Use budget milestones and independent evaluation for a control-step run")
     return True
 
 
-def read_budget_ledger(path, *, environments, horizon, plan_sha256, mode):
+def read_budget_ledger(path, *, environments, horizon, plan_sha256, mode, training_seed=None):
     """Validate completed source rows and count physically executed actions."""
     completed = 0
     steps = 0
@@ -41,7 +55,8 @@ def read_budget_ledger(path, *, environments, horizon, plan_sha256, mode):
                 row = json.loads(line)
                 event = row["event"]
                 if (row["rollout_index"] != completed or row["plan_sha256"] != plan_sha256
-                        or row["mode"] != mode or row["task_id"] != 0 or row["seed_offset"] != 0):
+                        or row["mode"] != mode or row["task_id"] != 0 or row["seed_offset"] != 0
+                        or row.get("training_seed") != training_seed):
                     raise RuntimeError("Source budget ledger has mismatched rollout or reset plan")
                 if event == "source_rollout_started" and pending is None:
                     pending = row["trial_ids"]
@@ -83,6 +98,9 @@ def control_budget_runner(base_runner):
         def __init__(self, cfg, *args, **kwargs):
             super().__init__(cfg, *args, **kwargs)
             self.budget = cfg.runner.xvla_control_step_budget
+            self.training_seed = cfg.runner.get("xvla_training_seed")
+            self.targets = tuple(cfg.runner.get("xvla_control_step_milestones") or (self.budget,))
+            self.milestone_receipts = []
             self.run_dir = Path(os.environ["XVLA_RUN_DIR"])
             self.ledger_path = self.run_dir / "source_resets_0.jsonl"
             self.summary_path = self.run_dir / "control_step_budget.json"
@@ -91,12 +109,13 @@ def control_budget_runner(base_runner):
             self.reset_pool = cfg.env.train.xvla_source_reset_pool
             self.max_batch_steps = self.environments * self.horizon
             if self.ledger_path.exists() or self.summary_path.exists():
-                raise FileExistsError("Control-step pilot requires a fresh Slurm run directory")
+                raise FileExistsError("Control-step training requires a fresh Slurm run directory")
 
         def _ledger(self):
             return read_budget_ledger(
                 self.ledger_path, environments=self.environments, horizon=self.horizon,
                 plan_sha256=self.reset_pool.sha256, mode=self.reset_pool.mode,
+                training_seed=self.training_seed,
             )
 
         def _write_budget(self, ledger, state, **extra):
@@ -111,6 +130,8 @@ def control_budget_runner(base_runner):
                 **ledger,
                 **extra,
             }
+            if self.training_seed is not None:
+                summary.update(training_seed=self.training_seed, milestones=self.milestone_receipts)
             temporary = self.summary_path.with_suffix(".tmp")
             temporary.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
             temporary.replace(self.summary_path)
@@ -121,9 +142,10 @@ def control_budget_runner(base_runner):
             if ledger["completed_rollouts"] != self.global_step or ledger["partial_rollout"]:
                 raise RuntimeError("Source budget ledger does not cover the completed PPO cycles exactly")
             self._write_budget(ledger, "RUNNING")
-            if ledger["policy_env_steps"] < self.budget:
+            target = self.targets[len(self.milestone_receipts)]
+            if ledger["policy_env_steps"] < target:
                 return
-            if ledger["policy_env_steps"] >= self.budget + self.max_batch_steps:
+            if ledger["policy_env_steps"] >= target + self.max_batch_steps:
                 raise RuntimeError("Actual environment interaction exceeded one rollout batch of overshoot")
 
             # Distinguish a completed collection with no reward from a learned policy.
@@ -133,14 +155,34 @@ def control_budget_runner(base_runner):
                     optimizer_updates += sum(json.loads(line)["event"] == "optimizer" for line in stream)
             if bool(optimizer_updates) != bool(ledger["positive_reward_rollouts"]):
                 raise RuntimeError("Observed successes disagree with actual actor optimizer activity")
-            self.update_rollout_weights()
+            final = target == self.budget
+            if final:
+                self.update_rollout_weights()
             self._save_checkpoint()
             checkpoint = (
                 Path(self.cfg.runner.logger.log_path) / self.cfg.runner.logger.experiment_name
                 / "checkpoints" / f"global_step_{self.global_step}" / "actor"
             )
+            state = "COMPLETE_VALID" if optimizer_updates else "COMPLETE_NO_SIGNAL"
+            if self.training_seed is not None:
+                evidence = json.loads((checkpoint / "xvla_evidence.json").read_text(encoding="utf-8"))
+                digest = evidence["digest"]
+                if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                    raise RuntimeError("Milestone checkpoint is missing its audited model-state digest")
+                self.milestone_receipts.append({
+                    **ledger,
+                    "state": state,
+                    "requested_policy_env_steps": target,
+                    "overshoot_policy_env_steps": ledger["policy_env_steps"] - target,
+                    "optimizer_updates": optimizer_updates,
+                    "checkpoint_path": str(checkpoint.resolve()),
+                    "checkpoint_sha256": digest,
+                })
+            if not final:
+                self._write_budget(ledger, "RUNNING")
+                return
             self._write_budget(
-                ledger, "COMPLETE_VALID" if optimizer_updates else "COMPLETE_NO_SIGNAL",
+                ledger, state,
                 optimizer_updates=optimizer_updates, checkpoint_path=str(checkpoint.resolve()),
             )
             raise _BudgetComplete
@@ -164,8 +206,35 @@ def control_budget_runner(base_runner):
     return ControlBudgetRunner
 
 
+def seed_training_worker(seed):
+    import numpy as np
+    import torch
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
+def control_budget_rollout(base_rollout):
+    class ControlBudgetRollout(base_rollout):
+        def init_worker(self):
+            seed = self.cfg.runner.xvla_training_seed
+            seed_training_worker(seed)
+            super().init_worker()
+            # Start exploration at a known RNG state regardless of model construction draws.
+            seed_training_worker(seed)
+
+    return ControlBudgetRollout
+
+
 def control_budget_actor(base_actor):
     class ControlBudgetActor(base_actor):
+        def init_worker(self):
+            seed = self.cfg.runner.get("xvla_training_seed")
+            if seed is not None:
+                seed_training_worker(seed)
+            return super().init_worker()
+
         def run_training(self):
             import torch
 

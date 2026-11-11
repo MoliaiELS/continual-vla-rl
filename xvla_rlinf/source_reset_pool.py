@@ -105,7 +105,13 @@ class _SourceResetEnv:
 
     def __init__(self, cfg, num_envs, seed_offset, total_num_processes, worker_info):
         self._source_plan = _read_env_plan(cfg)
-        self._source_rng = np.random.default_rng(np.random.SeedSequence([self._source_plan.seed, seed_offset]))
+        self._source_training_seed = cfg["xvla_source_reset_pool"].get("training_seed")
+        entropy = [self._source_plan.seed, seed_offset]
+        if self._source_training_seed is not None:
+            if type(self._source_training_seed) is not int or self._source_training_seed < 0:
+                raise ValueError("Source training seed must be a nonnegative integer")
+            entropy.append(self._source_training_seed)
+        self._source_rng = np.random.default_rng(np.random.SeedSequence(entropy))
         self._source_rollout_index = 0
         self._source_reset_pending = None
         self._source_active_rollout = None
@@ -183,6 +189,8 @@ class _SourceResetEnv:
                 "group_trial_ids": trials[::self.group_size],
                 "first_chunk_policy_env_steps": policy_steps,
             }
+            if self._source_training_seed is not None:
+                row["training_seed"] = self._source_training_seed
             self._write_source_event(row)
             self._source_active_rollout = row
             self._source_reset_pending = None

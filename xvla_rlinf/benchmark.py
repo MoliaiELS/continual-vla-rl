@@ -282,10 +282,13 @@ def main(argv=None):
     parser.add_argument("--start-trial", type=int, default=0, help="First initial-state index in each task")
     parser.add_argument("--trials", type=int, default=5)
     parser.add_argument("--checkpoint", type=Path, help="Independently audited SFT or RL actor checkpoint")
+    parser.add_argument("--expected-checkpoint-sha256", help="Required audited model-state digest for the panel")
     parser.add_argument("--policy-path", choices=("native", "deployed", "online"), default="native")
     args = parser.parse_args(argv)
     if (args.checkpoint is not None) != (args.model in CHECKPOINT_MODELS):
         parser.error("--checkpoint is required for SFT and RL models and applies only to them")
+    if args.expected_checkpoint_sha256 is not None and args.checkpoint is None:
+        parser.error("--expected-checkpoint-sha256 requires --checkpoint")
     try:
         plan = build_trials(args.start_task, args.task_count, args.trials, start_trial=args.start_trial)
     except ValueError as error:
@@ -334,6 +337,9 @@ def main(argv=None):
             record["code_commit"] = subprocess.check_output(
                 ["git", "-C", str(repository), "rev-parse", "HEAD"], text=True).strip()
             model, record["checkpoint"] = _load_policy(args.model, args.checkpoint)
+            if (args.expected_checkpoint_sha256 is not None
+                    and record["checkpoint"]["checkpoint_state_sha256"] != args.expected_checkpoint_sha256):
+                raise RuntimeError("Loaded model-state digest differs from the pinned benchmark checkpoint")
             if not native:
                 model.xcfg.update(eval_sampler=sampler, eval_history_mode="measured_state")
                 record["protocol"]["terminal_std"] = model.sampler.std.tolist()

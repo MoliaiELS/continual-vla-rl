@@ -1,5 +1,5 @@
 param(
-    [Parameter(Position=0)][ValidateSet('audit','sync','bootstrap','download','submit','status','logs','session','e2-start','e2-status')][string]$Command='audit',
+    [Parameter(Position=0)][ValidateSet('audit','sync','bootstrap','download','submit','status','logs','session','e2-start','e2-status','e3-start','e3-status')][string]$Command='audit',
     [Parameter(Position=1)][string]$Value='unit',
     [ValidateSet('libero','pt')][string]$Model='libero',
     [int]$Gpus=1,
@@ -12,6 +12,7 @@ param(
     [ValidatePattern('^[0-9]+$')][string]$AuditJobId,
     [ValidatePattern('^[0-9]+$')][string]$DeployedJobId,
     [ValidatePattern('^[0-9]+$')][string]$OnlineJobId,
+    [ValidatePattern('^[0-9]+$')][string]$DevJobId,
     [ValidateSet('256','1024')][string]$SftSteps='256',
     [ValidateSet('reference','expanded','stratified')][string]$ResetPool
 )
@@ -47,6 +48,23 @@ fi
  }
  'e2-status' {
   Invoke-XRemote "cat '$data/protocol_20261110/e2_dispatch.json'"
+ }
+ 'e3-start' {
+  if (-not $DevJobId) { throw 'E3 start requires the paired development benchmark job ID' }
+  Invoke-XRemote @"
+python='$($settings.CondaRoot)/envs/vla_budget_rl/bin/python'
+repo='$snapshot'
+state='$data/protocol_20261110/e3_dispatch.json'
+if [[ -f "`$state" ]]; then
+  commit=`$("`$python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "`$state")
+  [[ "`$commit" =~ ^[a-f0-9]{40}`$ ]]
+  repo='$($settings.RunCodeRoot)'/"`$commit"
+fi
+"`$python" "`$repo/tools/xvla/e3_dispatch.py" start --repo "`$repo" --data '$data' --partition '$($settings.Partition)' --dev-job-id '$DevJobId'
+"@
+ }
+ 'e3-status' {
+  Invoke-XRemote "cat '$data/protocol_20261110/e3_dispatch.json'"
  }
  'session' {
   # One persistent connection for serial diagnostics during unstable VPN links.
@@ -110,6 +128,7 @@ echo XVLA_DOWNLOAD_PID=`$!
   $submitOptions=''
   $isSequenceDev=$Value -in @('benchmark_sft_sequence_dev','benchmark_rl_sequence_dev')
   $isE1Panel=$Value -in @('benchmark_e1_deployed','benchmark_e1_online')
+  $isProtocolDev=$Value -eq 'benchmark_protocol_dev'
   $isBenchmark=$isE1Panel -or $isSequenceDev -or $Value -in @('benchmark_libero','benchmark_pt','benchmark_sft_smoke','benchmark_sft_fewshot','benchmark_sft_source10','benchmark_rl_source10')
   $isPtRl=$Value -in @('ppo_pt','grpo_pt','ppo_source10','grpo_source10','ppo_source10_pool','ppo_e2')
   if ($Value -in @('ppo_source10_pool','ppo_e2')) {
@@ -131,7 +150,7 @@ echo XVLA_DOWNLOAD_PID=`$!
    throw 'Benchmark shard options require a benchmark mode'
   }
   $isSourceSft=$Value -in @('sft_source10','sft_source10_lora')
-  if ($isBenchmark -or $isSourceSft -or $isPtRl -or $isSourceResetEval -or $Value -in @('convert_fewshot','sft_fewshot','replay_absolute','sft_action_check','convert_source10')) {
+  if ($isBenchmark -or $isProtocolDev -or $isSourceSft -or $isPtRl -or $isSourceResetEval -or $Value -in @('convert_fewshot','sft_fewshot','replay_absolute','sft_action_check','convert_source10')) {
    $submitOptions += " --gpu-model $GpuModel"
   } elseif ($PSBoundParameters.ContainsKey('GpuModel')) {
    throw 'GPU model override applies only to benchmark and Pt few-shot pipeline modes'

@@ -18,12 +18,13 @@ BENCHMARK_MODELS = {
 }
 SEQUENCE_DEV_MODES = ('benchmark_sft_sequence_dev', 'benchmark_rl_sequence_dev')
 E1_PANELS = {'benchmark_e1_deployed': (10, 20), 'benchmark_e1_online': (30, 10)}
+PROTOCOL_DEV_MODE = 'benchmark_protocol_dev'
 CPU_RESET_AUDITS = ('source_reset_audit', 'e1_source_audit')
 SOURCE_RL_MODES = ('ppo_source10', 'grpo_source10', 'ppo_source10_pool', 'ppo_e2')
 PT_RL_MODES = ('ppo_pt', 'grpo_pt', *SOURCE_RL_MODES)
 SOURCE_DATASET = Path('datasets/source-spatial-task0-10')
 CONVERSION_MODES = ('convert', 'convert_fewshot', 'convert_source10')
-GPU_MODEL_MODES = (*BENCHMARK_MODELS, *PT_RL_MODES, 'convert_fewshot', 'sft_fewshot',
+GPU_MODEL_MODES = (*BENCHMARK_MODELS, *PT_RL_MODES, PROTOCOL_DEV_MODE, 'convert_fewshot', 'sft_fewshot',
                    'replay_absolute', 'sft_action_check', 'convert_source10', 'sft_source10', 'sft_source10_lora',
                    'source_reset_solvability', 'source_reset_sft')
 FEWSHOT_DATASET = Path('datasets/fewshot-spatial-task0-5')
@@ -157,7 +158,7 @@ def main():
         'alignment', 'native_eval', 'stochastic_eval', *CONVERSION_MODES,
         'sft', 'ppo', 'grpo', 'grpo_exploration', 'grpo_stress',
         'sft_fewshot', 'sft_source10', 'sft_source10_lora', 'replay_absolute', 'sft_action_check',
-        *PT_RL_MODES, *BENCHMARK_MODELS,
+        *PT_RL_MODES, *BENCHMARK_MODELS, PROTOCOL_DEV_MODE,
     ], required=True)
     p.add_argument('--gpus',type=int,choices=[0,1,2],required=True);p.add_argument('--partition',required=True)
     p.add_argument('--gpu-model', choices=['3090', '4090'])
@@ -193,6 +194,11 @@ def main():
         extra = [str(a.start_task), str(a.task_count), str(a.trials), str(a.start_trial)]
         if benchmark['checkpoint'] is not None:
             extra.append(benchmark['checkpoint'])
+    if a.mode == PROTOCOL_DEV_MODE:
+        from protocol_dev import development_plan
+
+        benchmark = development_plan(a.repo, a.data, a.partition)
+        extra = [json.dumps(benchmark, separators=(',', ':'))]
     if a.mode in CONVERSION_MODES:
         conversion = conversion_settings(a)
         extra = [str(conversion[key]) for key in (
@@ -260,7 +266,7 @@ def gpu_commitment(info):
     return max(totals,default=0)
 
 
-def submit_locked(a,conversion,extra,benchmark=None,initial_sft=None):
+def submit_locked(a,conversion,extra,benchmark=None,initial_sft=None,*,walltime=None):
     allocated=0
     # squeue's active set includes pending reservations as well as running jobs.
     ids=subprocess.check_output(['squeue','-h','-u',os.environ['USER'],'-o','%i'],text=True).split()
@@ -270,7 +276,10 @@ def submit_locked(a,conversion,extra,benchmark=None,initial_sft=None):
     if a.gpus+allocated>2:
         raise RuntimeError(f'BLOCKED_GPU_BUDGET: requested={a.gpus}, own active/pending commitment={allocated}, cap=2; no job submitted')
     if a.mode not in ('unit', 'imports', *CPU_RESET_AUDITS) and a.gpus==0:raise ValueError('Real model/rollout smoke requires explicit GPU allocation')
-    walltime = '04:00:00' if a.mode == 'ppo_e2' else '01:00:00'
+    walltime = walltime or {
+        'ppo_e2': '04:00:00',
+        'benchmark_protocol_dev': '02:00:00',
+    }.get(a.mode, '01:00:00')
     cmd=['sbatch','--parsable','--partition='+a.partition,'--exclude=4090node1','--nodes=1','--ntasks=1',
          '--cpus-per-task=8','--time='+walltime,'--job-name=xvla-'+a.mode,
          '--output='+str(a.data/'logs/%j.out'),'--error='+str(a.data/'logs/%j.err')]
@@ -278,7 +287,10 @@ def submit_locked(a,conversion,extra,benchmark=None,initial_sft=None):
     if a.gpus:
         cmd.append(f'--gres=gpu:{gpu_model}:{a.gpus}')
     cmd+=[str(a.repo/'tools/xvla/job.sh'),str(a.repo),a.mode,str(a.gpus),*extra]
-    result=subprocess.check_output(cmd,text=True).strip()
+    try:
+        result=subprocess.check_output(cmd,text=True,stderr=subprocess.PIPE).strip()
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(f'Slurm rejected submission: {error.stderr.strip()}') from error
     record={'job_id':result,'mode':a.mode,'requested_gpus':a.gpus,'own_preexisting_gpus':allocated,
             'command':cmd,'conversion':conversion,'benchmark':benchmark,
             'requested_gpu_model':gpu_model if a.gpus else None}
@@ -288,4 +300,5 @@ def submit_locked(a,conversion,extra,benchmark=None,initial_sft=None):
     receipt.parent.mkdir(parents=True,exist_ok=True)
     receipt.write_text(json.dumps(record,indent=2)+'\n')
     print(json.dumps(record))
+    return record
 if __name__=='__main__':main()

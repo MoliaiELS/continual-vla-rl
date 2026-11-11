@@ -157,6 +157,22 @@ class SourceResetPoolTests(unittest.TestCase):
         with patch.object(FakeLibero, "_get_random_reset_state_ids", return_value=np.array([0, 1]), create=True):
             self.assertIs(type(worker._setup_env_and_wrappers(FakeLibero, cfg, 4)), FakeLibero)
 
+    def test_formal_training_seed_varies_reset_draws_without_changing_plan(self):
+        worker = source_reset_worker(FakeWorker)()
+        plan = load_source_reset_plan(self.path, self.digest, "stratified")
+        for seed in (None, 101, 202):
+            cfg = self.config()
+            entropy = [plan.seed, 0]
+            if seed is not None:
+                cfg.xvla_source_reset_pool.training_seed = seed
+                entropy.append(seed)
+            with self.subTest(seed=seed):
+                env = worker._setup_env_and_wrappers(FakeLibero, cfg, 4)
+                draws = env.reset_state_ids[::2]
+                expected = plan.sample(np.random.default_rng(np.random.SeedSequence(entropy)), 2)
+                np.testing.assert_array_equal(draws, expected)
+                self.assertEqual(env._source_plan.sha256, self.digest)
+
 
 if __name__ == "__main__":
     unittest.main()

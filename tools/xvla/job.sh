@@ -66,6 +66,8 @@ case "$mode" in
    python -m xvla_rlinf.benchmark --model sft-fewshot --policy-path "${mode#benchmark_e1_}" \
      --start-task "${4:?source task}" --task-count "${5:?task count}" --trials "${6:?trial count}" \
      --start-trial "${7:?start trial}" --checkpoint "${8:?audited B0 checkpoint}" ;;
+ benchmark_protocol_dev)
+   python "$repo/tools/xvla/protocol_dev.py" --plan "${4:?audited paired source development plan}" ;;
  alignment) python -m xvla_rlinf.smoke alignment ;;
  native_eval) python -m xvla_rlinf.entry --config-name native_eval_smoke ;;
  stochastic_eval) python -m xvla_rlinf.entry --config-name stochastic_eval_smoke ;;
@@ -136,20 +138,26 @@ PY
  ppo_pt|grpo_pt)
    export XVLA_INITIAL_SFT_CHECKPOINT="${4:?audited few-shot SFT actor checkpoint directory}"
    python -m xvla_rlinf.entry --config-name "${mode}_smoke" ;;
- ppo_source10|grpo_source10|ppo_source10_pool|ppo_e2)
+ ppo_source10|grpo_source10|ppo_source10_pool|ppo_e2|ppo_e3)
    export XVLA_INITIAL_SFT_CHECKPOINT="${4:?audited source-10 LoRA checkpoint}"
    rl_mode="${mode%%_source10*}"
-   if [[ "$mode" == ppo_e2 ]]; then rl_mode=ppo; fi
+   if [[ "$mode" == ppo_e2 || "$mode" == ppo_e3 ]]; then rl_mode=ppo; fi
    env_count=2
    if [[ "$rl_mode" == grpo ]]; then env_count=4; fi
    pool_args=()
-   if [[ "$mode" == ppo_source10_pool || "$mode" == ppo_e2 ]]; then
+   if [[ "$mode" == ppo_source10_pool || "$mode" == ppo_e2 || "$mode" == ppo_e3 ]]; then
      env_count=4
      pool_args=(env.train.specific_reset_id=null '+env.train.task_id_filter=[0]'
                 "+env.train.xvla_source_reset_pool.path=${5:?frozen reset pool}"
                 "+env.train.xvla_source_reset_pool.sha256=${6:?reset pool SHA256}"
                 "+env.train.xvla_source_reset_pool.mode=${7:?reset sampling mode}")
-     if [[ "$mode" == ppo_e2 ]]; then
+     if [[ "$mode" == ppo_e3 ]]; then
+       pool_args+=(runner.max_epochs=2048 runner.max_steps=2048 runner.save_interval=-1
+                   runner.val_check_interval=-1 +runner.xvla_control_step_budget=200000
+                   '+runner.xvla_control_step_milestones=[50000,100000,200000]'
+                   "+runner.xvla_training_seed=${8:?registered training seed}"
+                   env.train.video_cfg.save_video=false)
+     elif [[ "$mode" == ppo_e2 ]]; then
        pool_args+=(runner.max_epochs=256 runner.max_steps=256 runner.save_interval=-1
                    runner.val_check_interval=-1 +runner.xvla_control_step_budget=25000
                    env.train.video_cfg.save_video=false)
@@ -163,6 +171,12 @@ PY
      actor.model.xvla.rotation_std=0.01 actor.model.xvla.gripper_logit_std=0.15 \
      "env.train.total_num_envs=$env_count" "actor.global_batch_size=$((env_count * 10))" "${pool_args[@]}" ;;
  sft) python -m xvla_rlinf.sft_entry --config-path "$repo/configs/xvla" --config-name sft_smoke ;;
+ sft_cont)
+   export XVLA_SFT_CONT_CHECKPOINT="${4:?audited B0 checkpoint}"
+   train_seed="${5:?registered SFT-cont training seed}"
+   [[ "$XVLA_SFT_CONT_CHECKPOINT" == /* && "$train_seed" =~ ^(0|[1-9][0-9]*)$ ]]
+   python -m xvla_rlinf.sft_entry --config-path "$repo/configs/xvla" --config-name sft_cont \
+     "actor.seed=$train_seed" ;;
  sft_fewshot|sft_source10|sft_source10_lora)
    sft_steps="${4:?bounded SFT step budget}"
    [[ "$sft_steps" == 256 || "$sft_steps" == 1024 ]]
@@ -188,6 +202,32 @@ case "$mode" in
    python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$XVLA_RUN_DIR/${mode}-smoke/checkpoints/global_step_1/actor" ;;
  ppo_source10_pool)
    python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$XVLA_RUN_DIR/${mode}-smoke/checkpoints/global_step_2/actor" ;;
+ ppo_e3)
+   for steps in 50000 100000 200000; do
+     checkpoint_info="$(python - "$XVLA_RUN_DIR" "$steps" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1]).resolve()
+budget = json.loads((root / "control_step_budget.json").read_text())
+if budget["state"] not in ("COMPLETE_VALID", "COMPLETE_NO_SIGNAL"):
+    raise RuntimeError("Formal PPO did not reach its control-step budget")
+row, = [row for row in budget["milestones"] if row["requested_policy_env_steps"] == int(sys.argv[2])]
+checkpoint = Path(row["checkpoint_path"]).resolve()
+if not checkpoint.is_relative_to(root):
+    raise RuntimeError("Formal PPO checkpoint escaped its Slurm output directory")
+print(checkpoint, row["checkpoint_sha256"])
+PY
+     )"
+     read -r checkpoint digest <<< "$checkpoint_info"
+     python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$checkpoint"
+     eval_dir="$XVLA_RUN_DIR/source_dev/control_step_$steps"
+     mkdir -p "$eval_dir"
+     XVLA_RUN_DIR="$eval_dir" python -m xvla_rlinf.benchmark --model rl-source10 \
+       --policy-path deployed --start-task 0 --task-count 1 --start-trial 0 --trials 30 \
+       --checkpoint "$checkpoint" --expected-checkpoint-sha256 "$digest"
+   done ;;
  ppo_e2)
    checkpoint="$(python - "$XVLA_RUN_DIR" <<'PY'
 import json
@@ -213,9 +253,33 @@ PY
    elif ((dispatch_status)); then
      exit "$dispatch_status"
    fi ;;
+ sft_cont)
+   sft_cont_milestones=(512 1024 2048)
+   sft_cont_checkpoints="$XVLA_RUN_DIR/sft_cont/checkpoints"
+   for step in "${sft_cont_milestones[@]}"; do
+     python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$sft_cont_checkpoints/global_step_${step}/actor"
+   done
+   for step in "${sft_cont_milestones[@]}"; do
+     eval_dir="$XVLA_RUN_DIR/source_dev/global_step_${step}"
+     mkdir -p "$eval_dir"
+     XVLA_RUN_DIR="$eval_dir" python -m xvla_rlinf.benchmark --model sft-fewshot --policy-path deployed \
+       --start-task 0 --task-count 1 --start-trial 0 --trials 30 \
+       --checkpoint "$sft_cont_checkpoints/global_step_${step}/actor"
+   done ;;
  sft_fewshot)
    python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$XVLA_RUN_DIR/sft_fewshot-smoke/checkpoints/global_step_${sft_steps}/actor" ;;
  sft_source10|sft_source10_lora)
    python -m xvla_rlinf.checkpoint_check --checkpoint-dir "$XVLA_RUN_DIR/sft_source10/checkpoints/global_step_${sft_steps}/actor" ;;
+esac
+case "$mode" in
+ sft_cont|ppo_e3)
+   dispatch_status=0
+   python "$repo/tools/xvla/e3_dispatch.py" advance --repo "$repo" --data "$FYP_XVLA_DATA" \
+     --job-id "$SLURM_JOB_ID" || dispatch_status=$?
+   if ((dispatch_status == 75)); then
+     echo 'E3 endpoint verified. Successor awaits available Slurm resources.'
+   elif ((dispatch_status)); then
+     exit "$dispatch_status"
+   fi ;;
 esac
 echo XVLA_JOB_PASS

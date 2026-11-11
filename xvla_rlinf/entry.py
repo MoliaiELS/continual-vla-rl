@@ -2,7 +2,7 @@
 import json,os
 import hydra
 import torch.multiprocessing as mp
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, open_dict
 from . import register
 from .sft_entry import assert_pinned_runtime
 
@@ -21,14 +21,24 @@ def main(cfg):
     cfg=validate_cfg(cfg)
     from .rl_initialization import validate_rl_initialization
     validate_rl_initialization(cfg)
-    from .control_budget import control_budget_actor, control_budget_runner, validate_control_budget
+    from .control_budget import (
+        control_budget_actor, control_budget_rollout, control_budget_runner, validate_control_budget,
+    )
     from .source_reset_pool import source_reset_worker, validate_source_reset_pool
     budgeted = validate_control_budget(cfg)
+    training_seed = cfg.runner.get("xvla_training_seed")
+    rollout_worker = AuditedRollout
+    if training_seed is not None:
+        cfg.actor.seed = training_seed
+        cfg.env.train.seed = training_seed
+        with open_dict(cfg.env.train.xvla_source_reset_pool):
+            cfg.env.train.xvla_source_reset_pool.training_seed = training_seed
+        rollout_worker = control_budget_rollout(AuditedRollout)
     env_worker = source_reset_worker(EnvWorker) if validate_source_reset_pool(cfg) else EnvWorker
     print(OmegaConf.to_yaml(cfg,resolve=True),flush=True)
     cluster=Cluster(cluster_cfg=cfg.cluster)
     placement=HybridComponentPlacement(cfg,cluster)
-    rollout=AuditedRollout.create_group(cfg).launch(cluster,name=cfg.rollout.group_name,
+    rollout=rollout_worker.create_group(cfg).launch(cluster,name=cfg.rollout.group_name,
                         placement_strategy=placement.get_strategy('rollout'))
     env=env_worker.create_group(cfg).launch(cluster,name=cfg.env.group_name,
                         placement_strategy=placement.get_strategy('env'))
