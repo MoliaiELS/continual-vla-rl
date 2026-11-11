@@ -111,10 +111,14 @@ class XVLASftWorker(FSDPVlaSftWorker):
         self._xvla_audit=bool(self.cfg.runner.get('xvla_audit',True)) and self._world_size==1
         self._xvla_steps=0
         if hasattr(self, "_xvla_continuation"):
-            if not self._xvla_audit or self.optimizer_steps != 0 or self.optimizer.state:
+            # Pinned RLinf initializes AdamW's state buffers with a zero-LR,
+            # zero-gradient step and resets each Adam step counter to zero.
+            if (not self._xvla_audit or self.optimizer_steps != 0
+                    or any(state.get("step") != 0 for state in self.optimizer.state.values())):
                 raise RuntimeError("SFT-cont requires a single audited rank and a fresh optimizer")
             self._audit_write("sft_continuation", **self._xvla_continuation,
-                              optimizer_start_steps=self.optimizer_steps)
+                              optimizer_start_steps=self.optimizer_steps,
+                              optimizer_start_state_entries=len(self.optimizer.state))
         if self._xvla_audit:
             self._xvla_initial=self._model_fingerprints()
             self._audit_write('initialized',parameter_and_buffer_fingerprints=self._xvla_initial,

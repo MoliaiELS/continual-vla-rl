@@ -79,6 +79,28 @@ def schedule():
     ]
 
 
+def retry_first_sft(data, state, commit, job):
+    first, *remaining = state["runs"]
+    if (state["state"] != "RUNNING" or first["condition"] != "SFT-cont"
+            or first["state"] != "SUBMITTED" or first["job_id"] != job
+            or any(row["state"] != "READY" for row in remaining)):
+        raise ValueError("Retry requires the failed initial SFT-cont job and an untouched remaining matrix")
+    if any((data / "runs" / job / "sft_cont/checkpoints").glob("global_step_*")):
+        raise ValueError("Inspect existing checkpoints before retrying the initial SFT-cont job")
+    accounting = subprocess.check_output(
+        ["sacct", "-X", "-j", job, "-P", "-n", "-o", "JobIDRaw,State,ExitCode"], text=True,
+    ).splitlines()
+    failed = [line.split("|") for line in accounting if line.split("|", 1)[0] == job]
+    if len(failed) != 1 or failed[0][1] != "FAILED" or failed[0][2] == "0:0":
+        raise ValueError("Slurm must confirm the original SFT-cont job failed")
+    first.setdefault("failed_attempts", []).append(
+        {"job_id": job, "commit": state["commit"], "exit_code": failed[0][2]},
+    )
+    del first["job_id"]
+    first["state"] = "READY"
+    state["commit"] = commit
+
+
 def submission(repo, data, partition, row):
     checkpoint = str(data / "runs/19525/sft_source10/checkpoints/global_step_1024/actor")
     if row["condition"] == "SFT-cont":
@@ -202,10 +224,11 @@ def main():
     parser.add_argument("--partition")
     parser.add_argument("--dev-job-id", type=numeric_job)
     parser.add_argument("--job-id", type=numeric_job)
+    parser.add_argument("--failed-job-id", type=numeric_job)
     args = parser.parse_args()
     if args.action == "start" and (not args.partition or not args.dev_job_id or args.job_id):
         parser.error("start requires --partition and --dev-job-id")
-    if args.action == "advance" and (not args.job_id or args.partition or args.dev_job_id):
+    if args.action == "advance" and (not args.job_id or args.partition or args.dev_job_id or args.failed_job_id):
         parser.error("advance requires --job-id")
     import fcntl
 
@@ -215,16 +238,21 @@ def main():
     with path.with_suffix(".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         state = read(path) if path.exists() else None
-        if state is not None and state["commit"] != commit:
+        if state is not None and state["commit"] != commit and not args.failed_job_id:
             raise ValueError("E3 dispatch is frozen to a different commit")
         if args.action == "start":
             evidence = prerequisites(repo, data, args.dev_job_id)
             if state is None:
+                if args.failed_job_id:
+                    raise ValueError("No existing E3 dispatch to retry")
                 state = {"schema_version": 1, "commit": commit, "partition": args.partition,
                          "state": "RUNNING", "prerequisites": evidence, "runs": schedule()}
                 write(path, state)
             elif (state["partition"], state["prerequisites"]) != (args.partition, evidence):
                 raise ValueError("E3 dispatch prerequisites differ from the registered run")
+            elif args.failed_job_id:
+                retry_first_sft(data, state, commit, args.failed_job_id)
+                write(path, state)
         else:
             matches = [row for row in state["runs"] if row.get("job_id") == args.job_id] if state else []
             if len(matches) != 1:

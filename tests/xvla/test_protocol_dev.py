@@ -173,3 +173,23 @@ class ProtocolDevelopmentTests(unittest.TestCase):
         self.assertEqual(e3_dispatch.verify_benchmark(*arguments, require_fixed_probe=False)["successes"], 15)
         with self.assertRaisesRegex(ValueError, "Independent checkpoint check failed"):
             e3_dispatch.verify_benchmark(*arguments, require_fixed_probe=True)
+
+    def test_e3_retries_only_a_failed_initial_sft_without_checkpoints(self):
+        state = {"state": "RUNNING", "commit": "old", "runs": e3_dispatch.schedule()}
+        first = state["runs"][0]
+        first.update(state="SUBMITTED", job_id="300")
+        with patch.object(e3_dispatch.subprocess, "check_output", return_value="300|RUNNING|0:0\n"):
+            with self.assertRaisesRegex(ValueError, "Slurm must confirm"):
+                e3_dispatch.retry_first_sft(self.data, state, "new", "300")
+        with patch.object(e3_dispatch.subprocess, "check_output", return_value="300|FAILED|1:0\n"):
+            checkpoint = self.run_dir / "sft_cont/checkpoints/global_step_512"
+            checkpoint.mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, "existing checkpoints"):
+                e3_dispatch.retry_first_sft(self.data, state, "new", "300")
+            checkpoint.rmdir()
+            e3_dispatch.retry_first_sft(self.data, state, "new", "300")
+        self.assertEqual(state["commit"], "new")
+        self.assertEqual(first["state"], "READY")
+        self.assertEqual(first["seed"], 101)
+        self.assertNotIn("job_id", first)
+        self.assertEqual(first["failed_attempts"], [{"job_id": "300", "commit": "old", "exit_code": "1:0"}])

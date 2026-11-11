@@ -13,6 +13,7 @@ param(
     [ValidatePattern('^[0-9]+$')][string]$DeployedJobId,
     [ValidatePattern('^[0-9]+$')][string]$OnlineJobId,
     [ValidatePattern('^[0-9]+$')][string]$DevJobId,
+    [ValidatePattern('^[0-9]+$')][string]$FailedJobId,
     [ValidateSet('256','1024')][string]$SftSteps='256',
     [ValidateSet('reference','expanded','stratified')][string]$ResetPool
 )
@@ -51,16 +52,18 @@ fi
  }
  'e3-start' {
   if (-not $DevJobId) { throw 'E3 start requires the paired development benchmark job ID' }
+  $retryOptions=''
+  if ($FailedJobId) { $retryOptions=" --failed-job-id $FailedJobId" }
   Invoke-XRemote @"
 python='$($settings.CondaRoot)/envs/vla_budget_rl/bin/python'
 repo='$snapshot'
 state='$data/protocol_20261110/e3_dispatch.json'
-if [[ -f "`$state" ]]; then
+if [[ -z '$FailedJobId' && -f "`$state" ]]; then
   commit=`$("`$python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "`$state")
   [[ "`$commit" =~ ^[a-f0-9]{40}`$ ]]
   repo='$($settings.RunCodeRoot)'/"`$commit"
 fi
-"`$python" "`$repo/tools/xvla/e3_dispatch.py" start --repo "`$repo" --data '$data' --partition '$($settings.Partition)' --dev-job-id '$DevJobId'
+"`$python" "`$repo/tools/xvla/e3_dispatch.py" start --repo "`$repo" --data '$data' --partition '$($settings.Partition)' --dev-job-id '$DevJobId'$retryOptions
 "@
  }
  'e3-status' {
