@@ -53,7 +53,7 @@ def _check_b0(data, registry):
     return {"checkpoint_job_id": job, "checkpoint": str(checkpoint), "checkpoint_state_sha256": digest}
 
 
-def _read_shard(folder, *, job, digest, panel, trial_ids):
+def read_deployed_shard(folder, *, job, digest, panel, trial_ids):
     summary = e2_dispatch.read(folder / "benchmark_summary.json")
     protocol = summary["protocol"]
     if (summary["status"] != "PASS" or summary["complete"] is not True or summary["job_id"] != job
@@ -102,8 +102,8 @@ def development_plan(repo, data, partition):
     summary = legacy_dir / "benchmark_summary.json"
     if _sha256(summary) != legacy["summary_sha256"]:
         raise ValueError("B0 deployed E1 summary changed after dispatch")
-    _read_shard(legacy_dir, job=legacy_job, digest=conditions["B0"]["checkpoint_state_sha256"],
-                panel=hashes, trial_ids=TRIAL_IDS[10:])
+    read_deployed_shard(legacy_dir, job=legacy_job, digest=conditions["B0"]["checkpoint_state_sha256"],
+                        panel=hashes, trial_ids=TRIAL_IDS[10:])
     for condition, pool in zip(CONDITIONS[1:], e2_dispatch.POOLS, strict=True):
         recorded = state["pools"][pool]
         job = e2_dispatch.numeric_job(recorded["job_id"])
@@ -159,11 +159,11 @@ def evaluate(plan, run_dir, job_id):
             "--start-trial", "0", "--trials", str(len(trials)), "--checkpoint", checkpoint["checkpoint"],
             "--expected-checkpoint-sha256", digest,
         ], env={**os.environ, "XVLA_RUN_DIR": str(directory)}, check=True)
-        rows = _read_shard(directory, job=job_id, digest=digest, panel=panel, trial_ids=trials)
+        rows = read_deployed_shard(directory, job=job_id, digest=digest, panel=panel, trial_ids=trials)
         eval_jobs = [job_id]
         if is_baseline:
-            rows.extend(_read_shard(legacy_dir, job=legacy["job_id"], digest=digest, panel=panel,
-                                    trial_ids=TRIAL_IDS[10:]))
+            rows.extend(read_deployed_shard(legacy_dir, job=legacy["job_id"], digest=digest, panel=panel,
+                                            trial_ids=TRIAL_IDS[10:]))
             eval_jobs.append(legacy["job_id"])
         conditions[condition] = {
             **checkpoint, "eval_job_ids": eval_jobs, "successes": sum(row["success"] for row in rows),

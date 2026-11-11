@@ -11,8 +11,14 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-from e2_dispatch import BlockedResource, fixed_commit, numeric_job, read, write
-from submit import submit_locked
+if __package__:
+    from .e2_dispatch import BlockedResource, fixed_commit, numeric_job, read, write
+    from .protocol_dev import TRIAL_IDS, read_deployed_shard
+    from .submit import submit_locked
+else:
+    from e2_dispatch import BlockedResource, fixed_commit, numeric_job, read, write
+    from protocol_dev import TRIAL_IDS, read_deployed_shard
+    from submit import submit_locked
 
 
 SEEDS = (101, 202, 303)
@@ -20,10 +26,6 @@ POOLS = {"B1": "reference", "B2": "expanded", "M": "stratified"}
 SFT_STEPS = (512, 1024, 2048)
 PPO_STEPS = (50000, 100000, 200000)
 PROTOCOL = Path("configs/xvla/protocol_20261110")
-DEV_PLAN = [
-    {"task_id": 0, "trial_id": trial, "environment_seed": 142 + trial, "policy_seed": 10000 + trial}
-    for trial in range(30)
-]
 
 
 def digest(path):
@@ -43,7 +45,7 @@ def prerequisites(repo, data, job):
             or panel["status"] != "PASS" or panel["complete"] is not True or panel["job_id"] != job
             or panel["protocol_id"] != registry["protocol_id"] or panel["suite"] != "libero_spatial"
             or panel["policy_path"] != "deployed" or panel["source_task_id"] != 0
-            or panel["trial_ids"] != list(range(30)) or panel["e2_commit"] != e2["commit"]
+            or panel["trial_ids"] != TRIAL_IDS or panel["e2_commit"] != e2["commit"]
             or panel["split_sha256"] != registry["split_sha256"]
             or digest(repo / registry["split_path"]) != registry["split_sha256"]
             or digest(data / common["manifest"]) != common["manifest_sha256"]):
@@ -62,6 +64,11 @@ def prerequisites(repo, data, job):
     check = read(data / common["strict_reload_evidence"])
     if check["status"] != "PASS" or check["digest"] != expected["B0"][1]:
         raise ValueError("E3 requires the original B0 independent checkpoint receipt")
+    split = read(repo / registry["split_path"])
+    source = next(task for task in split["tasks"] if task["task_id"] == 0)
+    hashes = [source["state_sha256_by_trial_id"][trial] for trial in TRIAL_IDS]
+    if panel["initial_state_sha256_by_trial_id"] != hashes:
+        raise ValueError("Development panel state hashes differ from the frozen split")
     return {"job_id": job, "summary_sha256": digest(panel_path), "e2_commit": e2["commit"],
             "split_sha256": registry["split_sha256"], "b0_sha256": expected["B0"][1]}
 
@@ -86,7 +93,7 @@ def submission(repo, data, partition, row):
     return SimpleNamespace(repo=repo, data=data, partition=partition, mode=mode, gpus=1, gpu_model="4090"), extra, walltime
 
 
-def verify_benchmark(root, job, folder, checkpoint, checkpoint_sha):
+def verify_benchmark(root, job, folder, checkpoint, checkpoint_sha, panel):
     check_path = checkpoint / "checkpoint_check.json"
     check = read(check_path)
     if (not checkpoint.is_relative_to(root) or check["identity"]["slurm_job_id"] != job
@@ -95,20 +102,22 @@ def verify_benchmark(root, job, folder, checkpoint, checkpoint_sha):
             or check["fixed_probe"]["status"] != "PASS"):
         raise ValueError(f"Independent checkpoint check failed: {check_path}")
     eval_path = root / "source_dev" / folder / "benchmark_summary.json"
-    report = read(eval_path)
-    if (report["status"] != "PASS" or report["complete"] is not True or report["job_id"] != job
-            or report["suite"] != "libero_spatial" or report["trial_plan"] != DEV_PLAN
-            or report["protocol"]["policy_path"] != "deployed" or report["protocol"]["horizon"] != 800
-            or report["checkpoint"]["checkpoint_state_sha256"] != checkpoint_sha
-            or report["completed_episodes"] != 30 or not 0 <= report["successes"] <= 30):
-        raise ValueError(f"Development benchmark does not match the registered panel: {eval_path}")
+    episodes = read_deployed_shard(eval_path.parent, job=job, digest=checkpoint_sha,
+                                   panel=panel, trial_ids=TRIAL_IDS)
     return {"checkpoint_path": str(checkpoint), "checkpoint_sha256": checkpoint_sha,
-            "successes": report["successes"], "episodes": 30, "benchmark_path": str(eval_path)}
+            "successes": sum(row["success"] for row in episodes), "episodes": len(episodes),
+            "benchmark_path": str(eval_path)}
 
 
-def endpoint(data, row):
+def endpoint(repo, data, partition, row, panel):
     job = row["job_id"]
     root = (data / "runs" / job).resolve()
+    args, extra, walltime = submission(repo, data, partition, row)
+    receipt = read(root.parent / f"submission-{job}.json")
+    expected = [str(repo / "tools/xvla/job.sh"), str(repo), args.mode, "1", *extra]
+    if (receipt["command"][-len(expected):] != expected or f"--time={walltime}" not in receipt["command"]
+            or receipt["requested_gpus"] != 1 or receipt["requested_gpu_model"] != "4090"):
+        raise ValueError("E3 job does not match the frozen submission")
     results = []
     if row["condition"] == "SFT-cont":
         for step in SFT_STEPS:
@@ -118,13 +127,14 @@ def endpoint(data, row):
                 raise ValueError(f"SFT-cont checkpoint did not reach {step} optimizer updates")
             check = read(checkpoint / "checkpoint_check.json")
             results.append({"optimizer_steps": step, **verify_benchmark(
-                root, job, f"global_step_{step}", checkpoint, check["digest"],
+                root, job, f"global_step_{step}", checkpoint, check["digest"], panel,
             )})
         return {"state": "COMPLETE_VALID", "milestones": results}
 
     budget = read(root / "control_step_budget.json")
     if (budget["state"] not in ("COMPLETE_VALID", "COMPLETE_NO_SIGNAL")
             or budget["training_seed"] != row["seed"] or budget["partial_rollout"]
+            or budget["reset_plan_sha256"] != extra[2] or budget["sampling_mode"] != extra[3]
             or budget["requested_policy_env_steps"] != PPO_STEPS[-1]
             or budget["max_rollout_batch_control_steps"] != 1200
             or [item["requested_policy_env_steps"] for item in budget["milestones"]] != list(PPO_STEPS)):
@@ -136,7 +146,7 @@ def endpoint(data, row):
         results.append({"requested_policy_env_steps": step, "policy_env_steps": item["policy_env_steps"],
                         "optimizer_updates": item["optimizer_updates"], **verify_benchmark(
                             root, job, f"control_step_{step}", Path(item["checkpoint_path"]).resolve(),
-                            item["checkpoint_sha256"],
+                            item["checkpoint_sha256"], panel,
                         )})
     return {"state": budget["state"], "milestones": results}
 
@@ -218,7 +228,12 @@ def main():
             matches = [row for row in state["runs"] if row.get("job_id") == args.job_id] if state else []
             if len(matches) != 1:
                 raise ValueError("Job ID is absent from the E3 dispatch chain")
-            matches[0].update(endpoint(data, matches[0]))
+            prerequisite = state["prerequisites"]
+            panel_path = data / "runs" / prerequisite["job_id"] / "protocol_dev_summary.json"
+            if digest(panel_path) != prerequisite["summary_sha256"]:
+                raise ValueError("The paired development evidence changed after the E3 freeze")
+            hashes = read(panel_path)["initial_state_sha256_by_trial_id"]
+            matches[0].update(endpoint(repo, data, state["partition"], matches[0], hashes))
             write(path, state)
         dispatch_next(repo, data, state, path)
         print(json.dumps(state), flush=True)
