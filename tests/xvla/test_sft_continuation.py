@@ -1,10 +1,14 @@
 """Guard the SFT-cont budget and exact shared checkpoint/data lineage."""
+import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from xvla_rlinf.sft_continuation import read_continuation_source, validate_sft_cont_config
+
+
+HAS_TORCH = importlib.util.find_spec("torch") is not None
 
 
 class SFTContinuationTests(unittest.TestCase):
@@ -78,3 +82,27 @@ class SFTContinuationTests(unittest.TestCase):
         runner["early_stop"] = {"enabled": True}
         with self.assertRaisesRegex(ValueError, "fixed 2048-update budget"):
             validate_sft_cont_config(cfg)
+
+    @unittest.skipUnless(HAS_TORCH, "Real Torch unavailable; use dedicated pinned runtime")
+    def test_accepts_fresh_adamw_state_initialized_by_pinned_rlinf(self):
+        import torch
+        from rlinf.utils.utils import warmup_optimizer_state
+        from xvla_rlinf.sft_entry import FSDPVlaSftWorker, XVLASftWorker
+
+        parameter = torch.nn.Parameter(torch.ones(2))
+        worker = object.__new__(XVLASftWorker)
+        worker.cfg = SimpleNamespace(runner={})
+        worker.data_config = {}
+        worker._world_size = 1
+        worker._xvla_continuation = {}
+        worker.optimizer_steps = 0
+        worker.optimizer = torch.optim.AdamW([parameter])
+        warmup_optimizer_state(worker.optimizer)
+        self.assertTrue(worker.optimizer.state)
+
+        with (patch.object(FSDPVlaSftWorker, "init_worker"), patch.object(worker, "_audit_write"),
+              patch.object(worker, "_model_fingerprints", return_value={})):
+            worker.init_worker()
+            worker.optimizer.state[parameter]["step"].fill_(1)
+            with self.assertRaisesRegex(RuntimeError, "fresh optimizer"):
+                worker.init_worker()
