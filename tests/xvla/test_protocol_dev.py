@@ -161,3 +161,15 @@ class ProtocolDevelopmentTests(unittest.TestCase):
         _, m_args, _ = e3_dispatch.submission(self.repo, self.data, "GPU", mixture)
         self.assertEqual(b2_args[:3], m_args[:3])
         self.assertEqual((b2_args[3], m_args[3], walltime), ("uniform", "stratified", "24:00:00"))
+
+    def test_e3_sft_strict_reload_and_paired_rollouts_cover_checkpoint_without_ppo_probe(self):
+        checkpoint = self.run_dir / "actor"
+        self.write(checkpoint / "checkpoint_check.json", {
+            "status": "PASS", "strict_state_load": True, "identity": {"slurm_job_id": "300"},
+            "digest": self.b0, "exported_digest": self.b0, "fixed_probe": {"status": "NOT RUN"},
+        })
+        self.shard(self.run_dir / "source_dev/global_step_512", "300", self.b0, 0, 30)
+        arguments = self.run_dir, "300", "global_step_512", checkpoint, self.b0, self.panel
+        self.assertEqual(e3_dispatch.verify_benchmark(*arguments, require_fixed_probe=False)["successes"], 15)
+        with self.assertRaisesRegex(ValueError, "Independent checkpoint check failed"):
+            e3_dispatch.verify_benchmark(*arguments, require_fixed_probe=True)

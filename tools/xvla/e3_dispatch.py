@@ -93,13 +93,13 @@ def submission(repo, data, partition, row):
     return SimpleNamespace(repo=repo, data=data, partition=partition, mode=mode, gpus=1, gpu_model="4090"), extra, walltime
 
 
-def verify_benchmark(root, job, folder, checkpoint, checkpoint_sha, panel):
+def verify_benchmark(root, job, folder, checkpoint, checkpoint_sha, panel, *, require_fixed_probe):
     check_path = checkpoint / "checkpoint_check.json"
     check = read(check_path)
     if (not checkpoint.is_relative_to(root) or check["identity"]["slurm_job_id"] != job
             or check["status"] != "PASS" or check["strict_state_load"] is not True
             or check["digest"] != checkpoint_sha or check["exported_digest"] != checkpoint_sha
-            or check["fixed_probe"]["status"] != "PASS"):
+            or (require_fixed_probe and check["fixed_probe"]["status"] != "PASS")):
         raise ValueError(f"Independent checkpoint check failed: {check_path}")
     eval_path = root / "source_dev" / folder / "benchmark_summary.json"
     episodes = read_deployed_shard(eval_path.parent, job=job, digest=checkpoint_sha,
@@ -128,6 +128,7 @@ def endpoint(repo, data, partition, row, panel):
             check = read(checkpoint / "checkpoint_check.json")
             results.append({"optimizer_steps": step, **verify_benchmark(
                 root, job, f"global_step_{step}", checkpoint, check["digest"], panel,
+                require_fixed_probe=False,
             )})
         return {"state": "COMPLETE_VALID", "milestones": results}
 
@@ -146,7 +147,7 @@ def endpoint(repo, data, partition, row, panel):
         results.append({"requested_policy_env_steps": step, "policy_env_steps": item["policy_env_steps"],
                         "optimizer_updates": item["optimizer_updates"], **verify_benchmark(
                             root, job, f"control_step_{step}", Path(item["checkpoint_path"]).resolve(),
-                            item["checkpoint_sha256"], panel,
+                            item["checkpoint_sha256"], panel, require_fixed_probe=True,
                         )})
     return {"state": budget["state"], "milestones": results}
 
