@@ -6,17 +6,21 @@ import contextlib
 import hashlib
 import io
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+import time
 from types import SimpleNamespace
 
 if __package__:
     from .e2_dispatch import BlockedResource, fixed_commit, numeric_job, read, write
+    from .gpu_capacity import available_gpu_model
     from .protocol_dev import TRIAL_IDS, read_deployed_shard
     from .submit import submit_locked
 else:
     from e2_dispatch import BlockedResource, fixed_commit, numeric_job, read, write
+    from gpu_capacity import available_gpu_model
     from protocol_dev import TRIAL_IDS, read_deployed_shard
     from submit import submit_locked
 
@@ -103,16 +107,119 @@ def retry_first_sft(data, state, commit, job):
 
 def submission(repo, data, partition, row):
     checkpoint = str(data / "runs/19525/sft_source10/checkpoints/global_step_1024/actor")
+    gpu_model = row.get("gpu_model", "4090")
     if row["condition"] == "SFT-cont":
         mode, walltime = "sft_cont", "02:00:00"
         extra = [checkpoint, str(row["seed"])]
     else:
-        mode, walltime = "ppo_e3", "24:00:00"
+        mode = "ppo_e3"
+        walltime = {"4090": "24:00:00", "3090": "1-12:00:00"}[gpu_model]
         pool = POOLS[row["condition"]]
         plan = repo / "configs/xvla/source_pools" / f"{'expanded' if pool == 'stratified' else pool}.json"
         sampling = "stratified" if pool == "stratified" else "uniform"
         extra = [checkpoint, str(plan), digest(plan), sampling, str(row["seed"])]
-    return SimpleNamespace(repo=repo, data=data, partition=partition, mode=mode, gpus=1, gpu_model="4090"), extra, walltime
+    return SimpleNamespace(repo=repo, data=data, partition=partition, mode=mode, gpus=1, gpu_model=gpu_model), extra, walltime
+
+
+def matches_submission(receipt, args, extra, walltime):
+    expected = [str(args.repo / "tools/xvla/job.sh"), str(args.repo), args.mode, "1", *extra]
+    return (receipt["command"][-len(expected):] == expected and f"--time={walltime}" in receipt["command"]
+            and receipt["requested_gpus"] == 1 and receipt["requested_gpu_model"] == args.gpu_model)
+
+
+def owned_queue(job):
+    output = subprocess.check_output(
+        ["squeue", "-u", os.environ["USER"], "-h", "-o", "%i|%T|%R|%b"], text=True,
+    )
+    for line in output.splitlines():
+        job_id, *fields = line.split("|")
+        if job_id == job:
+            return fields
+    return []
+
+
+def cancelled_before_start(job):
+    output = subprocess.check_output(
+        ["sacct", "-X", "-j", job, "-P", "-n", "-o", "JobIDRaw,State,ElapsedRaw"], text=True,
+    )
+    return any(j == job and state.startswith("CANCELLED") and elapsed == "0"
+               for j, state, elapsed in (line.split("|") for line in output.splitlines() if line))
+
+
+def replace_pending_ppo(repo, data, state, path, commit, job):
+    import fcntl
+
+    row = next((entry for entry in state["runs"] if not entry["state"].startswith("COMPLETE_")), None)
+    if (state["state"] != "RUNNING" or row is None or row["condition"] not in POOLS
+            or row["state"] != "SUBMITTED" or row["job_id"] != job or row.get("gpu_model", "4090") != "4090"):
+        raise ValueError("Fallback requires the currently queued formal PPO run on 4090")
+    previous_repo = repo.parent / state["commit"]
+    previous = submission(previous_repo, data, state["partition"], row)
+    args, extra, walltime = submission(repo, data, state["partition"], {**row, "gpu_model": "3090"})
+    receipt_dir = data / "runs"
+    old_receipt = read(receipt_dir / f"submission-{job}.json")
+    if (not matches_submission(old_receipt, *previous) or previous[1][0] != extra[0]
+            or previous[1][2:] != extra[2:]):
+        raise ValueError("Fallback would change the registered PPO run")
+
+    migration = state.get("gpu_migration")
+    if migration is None:
+        if owned_queue(job) != ["PENDING", "(Resources)", "gres/gpu:4090:1"]:
+            raise ValueError("The original job is no longer pending on 4090 resources")
+        if available_gpu_model(state["partition"]) != "3090":
+            raise ValueError("Fallback requires free 3090 capacity and no eligible free 4090")
+        migration = {"original_job_id": job, "replacement_commit": commit,
+                     "prior_receipts": sorted(p.name for p in receipt_dir.glob("submission-*.json"))}
+        state["gpu_migration"] = migration
+        write(path, state)
+        try:
+            with (data / "submit.lock").open("a") as lock, contextlib.redirect_stdout(io.StringIO()):
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                receipt = submit_locked(args, None, extra, initial_sft={"checkpoint": extra[0]},
+                                        walltime=walltime, hold=True)
+        except RuntimeError as error:
+            if str(error).startswith(("BLOCKED_GPU_BUDGET", "Slurm rejected submission:")):
+                del state["gpu_migration"]
+                write(path, state)
+            raise
+        migration["replacement_job_id"] = numeric_job(receipt["job_id"].split(";")[0])
+        write(path, state)
+    elif (migration["original_job_id"], migration["replacement_commit"]) != (job, commit):
+        raise ValueError("A different GPU migration is already in progress")
+    elif "replacement_job_id" not in migration:
+        before = set(migration["prior_receipts"])
+        candidates = [read(p) for p in receipt_dir.glob("submission-*.json") if p.name not in before]
+        recovered = [item for item in candidates if "--hold" in item["command"]
+                     and matches_submission(item, args, extra, walltime)]
+        if len(recovered) != 1:
+            raise RuntimeError("Reconcile the held Slurm submission before retrying the GPU fallback")
+        migration["replacement_job_id"] = numeric_job(recovered[0]["job_id"].split(";")[0])
+        write(path, state)
+
+    replacement = migration["replacement_job_id"]
+    queue = owned_queue(job)
+    if queue and queue[0] == "PENDING":
+        subprocess.run(["scancel", "--ctld", "--state=PENDING", "--user", os.environ["USER"], job], check=True)
+    for _ in range(8):
+        if cancelled_before_start(job):
+            break
+        queue = owned_queue(job)
+        if queue and queue[0] != "PENDING":
+            subprocess.run(["scancel", "--ctld", "--state=PENDING", "--user", os.environ["USER"], replacement],
+                           check=True)
+            del state["gpu_migration"]
+            write(path, state)
+            raise RuntimeError("The 4090 job started; the held 3090 replacement was cancelled")
+        time.sleep(1)
+    else:
+        raise RuntimeError("Awaiting confirmation that the 4090 job was cancelled; 3090 job remains held")
+
+    row.setdefault("replaced_jobs", []).append({"job_id": job, "commit": state["commit"],
+                                               "gpu_model": "4090", "reason": "no_eligible_4090_capacity"})
+    row.update(job_id=replacement, gpu_model="3090", release_pending=True)
+    state["commit"] = commit
+    del state["gpu_migration"]
+    write(path, state)
 
 
 def verify_benchmark(root, job, folder, checkpoint, checkpoint_sha, panel, *, require_fixed_probe):
@@ -136,9 +243,7 @@ def endpoint(repo, data, partition, row, panel):
     root = (data / "runs" / job).resolve()
     args, extra, walltime = submission(repo, data, partition, row)
     receipt = read(root.parent / f"submission-{job}.json")
-    expected = [str(repo / "tools/xvla/job.sh"), str(repo), args.mode, "1", *extra]
-    if (receipt["command"][-len(expected):] != expected or f"--time={walltime}" not in receipt["command"]
-            or receipt["requested_gpus"] != 1 or receipt["requested_gpu_model"] != "4090"):
+    if not matches_submission(receipt, args, extra, walltime):
         raise ValueError("E3 job does not match the frozen submission")
     results = []
     if row["condition"] == "SFT-cont":
@@ -183,9 +288,16 @@ def dispatch_next(repo, data, state, path):
         write(path, state)
         return
     if "job_id" in row:
+        if row.get("release_pending"):
+            queue = owned_queue(row["job_id"])
+            if queue[:2] == ["PENDING", "(JobHeldUser)"]:
+                subprocess.run(["scontrol", "release", row["job_id"]], check=True)
+            del row["release_pending"]
+            write(path, state)
         return
+    if "gpu_model" not in row and row["condition"] in POOLS:
+        row["gpu_model"] = available_gpu_model(state["partition"]) or "4090"
     args, extra, walltime = submission(repo, data, state["partition"], row)
-    expected = [str(repo / "tools/xvla/job.sh"), str(repo), args.mode, "1", *extra]
     receipts = data / "runs"
     if row["state"] == "SUBMITTING":
         prior = set(row["prior_receipts"])
@@ -193,7 +305,7 @@ def dispatch_next(repo, data, state, path):
         for candidate in receipts.glob("submission-*.json"):
             if candidate.name not in prior:
                 record = read(candidate)
-                if record["command"][-len(expected):] == expected:
+                if matches_submission(record, args, extra, walltime):
                     recovered.append(record)
         if len(recovered) != 1:
             raise RuntimeError("Reconcile the interrupted E3 submission with Slurm before retrying")
@@ -225,10 +337,14 @@ def main():
     parser.add_argument("--dev-job-id", type=numeric_job)
     parser.add_argument("--job-id", type=numeric_job)
     parser.add_argument("--failed-job-id", type=numeric_job)
+    parser.add_argument("--fallback-job-id", type=numeric_job)
     args = parser.parse_args()
     if args.action == "start" and (not args.partition or not args.dev_job_id or args.job_id):
         parser.error("start requires --partition and --dev-job-id")
-    if args.action == "advance" and (not args.job_id or args.partition or args.dev_job_id or args.failed_job_id):
+    if args.failed_job_id and args.fallback_job_id:
+        parser.error("Choose one failed retry or pending GPU fallback")
+    if args.action == "advance" and (not args.job_id or args.partition or args.dev_job_id
+                                     or args.failed_job_id or args.fallback_job_id):
         parser.error("advance requires --job-id")
     import fcntl
 
@@ -238,13 +354,13 @@ def main():
     with path.with_suffix(".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         state = read(path) if path.exists() else None
-        if state is not None and state["commit"] != commit and not args.failed_job_id:
+        if state is not None and state["commit"] != commit and not (args.failed_job_id or args.fallback_job_id):
             raise ValueError("E3 dispatch is frozen to a different commit")
         if args.action == "start":
             evidence = prerequisites(repo, data, args.dev_job_id)
             if state is None:
-                if args.failed_job_id:
-                    raise ValueError("No existing E3 dispatch to retry")
+                if args.failed_job_id or args.fallback_job_id:
+                    raise ValueError("No existing E3 dispatch to modify")
                 state = {"schema_version": 1, "commit": commit, "partition": args.partition,
                          "state": "RUNNING", "prerequisites": evidence, "runs": schedule()}
                 write(path, state)
@@ -253,6 +369,8 @@ def main():
             elif args.failed_job_id:
                 retry_first_sft(data, state, commit, args.failed_job_id)
                 write(path, state)
+            elif args.fallback_job_id:
+                replace_pending_ppo(repo, data, state, path, commit, args.fallback_job_id)
         else:
             matches = [row for row in state["runs"] if row.get("job_id") == args.job_id] if state else []
             if len(matches) != 1:

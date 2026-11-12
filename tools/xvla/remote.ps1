@@ -14,6 +14,7 @@ param(
     [ValidatePattern('^[0-9]+$')][string]$OnlineJobId,
     [ValidatePattern('^[0-9]+$')][string]$DevJobId,
     [ValidatePattern('^[0-9]+$')][string]$FailedJobId,
+    [ValidatePattern('^[0-9]+$')][string]$FallbackJobId,
     [ValidateSet('256','1024')][string]$SftSteps='256',
     [ValidateSet('reference','expanded','stratified')][string]$ResetPool
 )
@@ -52,13 +53,15 @@ fi
  }
  'e3-start' {
   if (-not $DevJobId) { throw 'E3 start requires the paired development benchmark job ID' }
+  if ($FailedJobId -and $FallbackJobId) { throw 'Choose a failed retry or a pending GPU fallback' }
   $retryOptions=''
   if ($FailedJobId) { $retryOptions=" --failed-job-id $FailedJobId" }
+  if ($FallbackJobId) { $retryOptions=" --fallback-job-id $FallbackJobId" }
   Invoke-XRemote @"
 python='$($settings.CondaRoot)/envs/vla_budget_rl/bin/python'
 repo='$snapshot'
 state='$data/protocol_20261110/e3_dispatch.json'
-if [[ -z '$FailedJobId' && -f "`$state" ]]; then
+if [[ -z '$retryOptions' && -f "`$state" ]]; then
   commit=`$("`$python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "`$state")
   [[ "`$commit" =~ ^[a-f0-9]{40}`$ ]]
   repo='$($settings.RunCodeRoot)'/"`$commit"

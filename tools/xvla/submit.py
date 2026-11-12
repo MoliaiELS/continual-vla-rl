@@ -266,7 +266,7 @@ def gpu_commitment(info):
     return max(totals,default=0)
 
 
-def submit_locked(a,conversion,extra,benchmark=None,initial_sft=None,*,walltime=None):
+def submit_locked(a,conversion,extra,benchmark=None,initial_sft=None,*,walltime=None,hold=False):
     allocated=0
     # squeue's active set includes pending reservations as well as running jobs.
     ids=subprocess.check_output(['squeue','-h','-u',os.environ['USER'],'-o','%i'],text=True).split()
@@ -286,6 +286,8 @@ def submit_locked(a,conversion,extra,benchmark=None,initial_sft=None,*,walltime=
     gpu_model = a.gpu_model or '4090'
     if a.gpus:
         cmd.append(f'--gres=gpu:{gpu_model}:{a.gpus}')
+    if hold:
+        cmd.append('--hold')
     cmd+=[str(a.repo/'tools/xvla/job.sh'),str(a.repo),a.mode,str(a.gpus),*extra]
     try:
         result=subprocess.check_output(cmd,text=True,stderr=subprocess.PIPE).strip()

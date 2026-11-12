@@ -161,6 +161,62 @@ class ProtocolDevelopmentTests(unittest.TestCase):
         _, m_args, _ = e3_dispatch.submission(self.repo, self.data, "GPU", mixture)
         self.assertEqual(b2_args[:3], m_args[:3])
         self.assertEqual((b2_args[3], m_args[3], walltime), ("uniform", "stratified", "24:00:00"))
+        fallback, fallback_args, fallback_walltime = e3_dispatch.submission(
+            self.repo, self.data, "GPU", {**mixture, "gpu_model": "3090"},
+        )
+        self.assertEqual((fallback.gpu_model, fallback_args, fallback_walltime),
+                         ("3090", m_args, "1-12:00:00"))
+
+    def test_e3_fallback_preserves_seed_and_submits_held_before_cancelling_pending(self):
+        from types import SimpleNamespace
+
+        old_repo = self.repo.parent / "old"
+        for repo in (old_repo, self.repo):
+            self.write(repo / "configs/xvla/source_pools/expanded.json", {"pool": "expanded"})
+        rows = e3_dispatch.schedule()
+        for row in rows[:5]:
+            row["state"] = "COMPLETE_VALID"
+        pending = rows[5]
+        pending.update(state="SUBMITTED", job_id="300")
+        state = {"state": "RUNNING", "partition": "GPU", "commit": "old", "runs": rows}
+        path = self.data / "e3_dispatch.json"
+        old, extra, walltime = e3_dispatch.submission(old_repo, self.data, "GPU", pending)
+        self.write(self.runs / "submission-300.json", {
+            "command": [f"--time={walltime}", str(old.repo / "tools/xvla/job.sh"), str(old.repo),
+                        "ppo_e3", "1", *extra],
+            "requested_gpus": 1, "requested_gpu_model": "4090",
+        })
+        actions = []
+
+        def submit(args, conversion, extra, **options):
+            self.assertEqual((args.gpu_model, extra[-2:], options["walltime"], options["hold"]),
+                             ("3090", ["stratified", "101"], "1-12:00:00", True))
+            actions.append("submit held")
+            return {"job_id": "301"}
+
+        def command(args, *, check):
+            actions.append((args[0], args[-1]))
+            if args[0] == "scancel":
+                self.assertIn("--state=PENDING", args)
+            else:
+                self.assertEqual(e3_dispatch.read(path)["runs"][5]["job_id"], "301")
+
+        lock = SimpleNamespace(LOCK_EX=1, flock=lambda file, mode: None)
+        with (patch.dict("sys.modules", {"fcntl": lock}), patch.dict(os.environ, {"USER": "test-user"}),
+              patch.object(e3_dispatch, "available_gpu_model", return_value="3090"),
+              patch.object(e3_dispatch, "owned_queue", side_effect=[
+                  ["PENDING", "(Resources)", "gres/gpu:4090:1"],
+                  ["PENDING", "(Resources)", "gres/gpu:4090:1"],
+                  ["PENDING", "(JobHeldUser)", "gres/gpu:3090:1"],
+              ]),
+              patch.object(e3_dispatch, "cancelled_before_start", return_value=True),
+              patch.object(e3_dispatch, "submit_locked", side_effect=submit),
+              patch.object(e3_dispatch.subprocess, "run", side_effect=command)):
+            e3_dispatch.replace_pending_ppo(self.repo, self.data, state, path, "new", "300")
+            e3_dispatch.dispatch_next(self.repo, self.data, state, path)
+        self.assertEqual(actions, ["submit held", ("scancel", "300"), ("scontrol", "301")])
+        self.assertEqual((pending["job_id"], pending["gpu_model"], state["commit"]), ("301", "3090", "new"))
+        self.assertEqual(pending["replaced_jobs"][0]["job_id"], "300")
 
     def test_e3_sft_strict_reload_and_paired_rollouts_cover_checkpoint_without_ppo_probe(self):
         checkpoint = self.run_dir / "actor"
