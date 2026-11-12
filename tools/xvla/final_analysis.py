@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
@@ -38,36 +39,60 @@ CONTRASTS = (
 IDENTITY = ("task_id", "trial_id", "environment_seed", "policy_seed")
 
 
-def _expected_panel(split_path):
+@dataclass(frozen=True)
+class Panel:
+    role: str
+    tasks: tuple[int, ...]
+    trials: tuple[int, ...]
+    repetitions: int
+    journal_key: str
+    bootstrap_seed: int
+    contrasts: tuple[tuple[str, str, str], ...]
+
+
+H_PANEL = Panel("final_H", TASKS, TRIALS, REPETITIONS, "episodes", BOOTSTRAP_SEED, CONTRASTS)
+SOURCE_A_PANEL = Panel(
+    "source_A_final_test", (0,), tuple(range(40, 50)), 5, "source_a_episodes", BOOTSTRAP_SEED + 1,
+    tuple((condition, "B0", "source_baseline_reference") for condition in TRAINED),
+)
+
+
+def _expected_panel(split_path, panel=H_PANEL):
     contents = split_path.read_bytes()
     if hashlib.sha256(contents).hexdigest() != SPLIT_SHA256:
         raise ValueError("Task and initial-state split differs from the frozen registration")
     split = json.loads(contents)
     evaluation = split["common_evaluation"]
-    if (tuple(split["final_H"]) != TASKS or tuple(evaluation["H_trial_ids"]) != TRIALS
-            or evaluation["H_repetitions_per_state"] != REPETITIONS):
+    if panel == SOURCE_A_PANEL:
+        if ((split["source_A"],) != panel.tasks or tuple(evaluation["source_final_test_trial_ids"]) != panel.trials):
+            raise ValueError("Unexpected scope in the frozen source A panel")
+    elif (tuple(split["final_H"]) != panel.tasks or tuple(evaluation["H_trial_ids"]) != panel.trials
+          or evaluation["H_repetitions_per_state"] != panel.repetitions):
         raise ValueError("Unexpected scope in the frozen H panel")
     task_hashes = {task["task_id"]: task["state_sha256_by_trial_id"] for task in split["tasks"]}
     hashes = {}
-    for task in TASKS:
-        for trial in TRIALS:
+    for task in panel.tasks:
+        for trial in panel.trials:
             digest = task_hashes[task][trial]
             if not re.fullmatch("[0-9a-f]{64}", digest):
                 raise ValueError(f"Invalid frozen initial-state digest for task {task}, trial {trial}")
-            for rep in range(REPETITIONS):
+            for rep in range(panel.repetitions):
                 key = (task, trial, 142 + trial + 1000 * rep, 10000 + 100 * task + trial + 1000 * rep)
                 hashes[key] = (digest, rep)
+    if panel == SOURCE_A_PANEL and len({digest for digest, _ in hashes.values()}) != len(panel.trials):
+        raise ValueError("The independent source panel requires distinct initial-state hashes")
     return hashes
 
 
-def _read_policy(entry, root, expected):
-    paths = entry["episodes"]
+def _read_policy(entry, root, expected, panel=H_PANEL):
+    paths = entry[panel.journal_key]
     if isinstance(paths, str):
         paths = [paths]
     if not isinstance(paths, list) or not paths or any(not isinstance(path, str) or not path for path in paths):
         raise ValueError("episodes must contain a journal path or a nonempty list of journal paths")
     rows = {}
     journals = []
+    requires_repetition_index = panel == SOURCE_A_PANEL
     for path in paths:
         journal = (root / path).resolve()
         contents = journal.read_bytes()
@@ -81,7 +106,9 @@ def _read_policy(entry, root, expected):
             if any(type(value) is not int for value in key) or key not in expected or key in rows:
                 raise ValueError(f"Unexpected or repeated episode identity at {where}: {key}")
             digest, rep = expected[key]
-            if (row["initial_state_sha256"] != digest or row.get("repetition_index", rep) != rep
+            row_rep = row.get("repetition_index", None if requires_repetition_index else rep)
+            if (row["initial_state_sha256"] != digest or row_rep != rep
+                    or (requires_repetition_index and type(row_rep) is not int)
                     or row.get("policy_path", "deployed") != "deployed"
                     or row.get("terminal_noise_seed") is not None):
                 raise ValueError(f"Episode differs from the frozen deployment panel at {where}")
@@ -102,7 +129,7 @@ def _read_policy(entry, root, expected):
             rows[key] = (success, steps)
     if rows.keys() != expected.keys():
         raise ValueError(f"Policy has {len(rows)} of {len(expected)} frozen episodes")
-    shape = (len(TASKS), len(TRIALS), REPETITIONS)
+    shape = (len(panel.tasks), len(panel.trials), panel.repetitions)
     success, steps = np.asarray([rows[key] for key in expected], dtype=np.int64).T
     return success.reshape(shape).astype(bool), steps.reshape(shape), journals
 
@@ -131,25 +158,25 @@ def _time_summary(success, steps):
     }
 
 
-def _policy_result(condition, seed, success, steps, journals, samples):
+def _policy_result(condition, seed, success, steps, journals, samples, panel):
     per_task = {}
     intervals = _ci(samples)
-    for index, task in enumerate(TASKS):
+    for index, task in enumerate(panel.tasks):
         wins, task_steps = success[index], steps[index]
         per_task[str(task)] = {
-            "unique_initial_states": len(TRIALS), "episodes": wins.size, "successes": int(wins.sum()),
+            "unique_initial_states": len(panel.trials), "episodes": wins.size, "successes": int(wins.sum()),
             "success_rate": float(wins.mean()), "paired_state_cluster_ci95": intervals[index],
             **_time_summary(wins, task_steps),
         }
     return {
         "condition": condition, "training_seed": seed, "journals": journals, "per_task": per_task,
         "macro_success_rate": float(success.mean()), "paired_state_cluster_ci95": _ci(samples.mean(axis=1)),
-        "unique_task_initial_state_pairs": len(TASKS) * len(TRIALS), "episodes": success.size,
+        "unique_task_initial_state_pairs": len(panel.tasks) * len(panel.trials), "episodes": success.size,
         "successes": int(success.sum()), **_time_summary(success, steps),
     }
 
 
-def _contrast(left, right, role, scores, bootstraps):
+def _contrast(left, right, role, scores, bootstraps, tasks):
     by_seed, task_diffs, task_bootstraps = [], [], []
     for seed in TRAINING_SEEDS:
         a = (left, seed)
@@ -168,7 +195,7 @@ def _contrast(left, right, role, scores, bootstraps):
                 str(task): {"success_rate_difference": float(task_delta[index]),
                             "paired_new_successes": int(gains[index].sum()),
                             "paired_new_failures": int(losses[index].sum())}
-                for index, task in enumerate(TASKS)
+                for index, task in enumerate(tasks)
             },
         })
     average = np.mean(task_diffs, axis=0)
@@ -187,48 +214,32 @@ def _contrast(left, right, role, scores, bootstraps):
         "per_task": {
             str(task): {"success_rate_difference": float(average[index]),
                         "paired_state_cluster_ci95": task_ci[index]}
-            for index, task in enumerate(TASKS)
+            for index, task in enumerate(tasks)
         },
-        "worst_task": {"task_id": TASKS[worst], "success_rate_difference": float(average[worst])},
+        "worst_task": {"task_id": tasks[worst], "success_rate_difference": float(average[worst])},
         "substantial_drop_threshold": SUBSTANTIAL_DROP,
         "substantial_drop_task_fraction": float(np.mean(average <= SUBSTANTIAL_DROP + 1e-12)),
     }
 
 
-def analyze(manifest_path, split_path=DEFAULT_SPLIT, *, replicates=BOOTSTRAP_REPLICATES):
-    if type(replicates) is not int or replicates < 2:
-        raise ValueError("At least two bootstrap replicates are required")
-    manifest_path = Path(manifest_path).resolve()
-    contents = manifest_path.read_bytes()
-    manifest = json.loads(contents)
-    expected = _expected_panel(Path(split_path))
-    entries = {}
-    for entry in manifest["policies"]:
-        condition, seed = entry["condition"], entry["seed"]
-        if (condition not in CONDITIONS or (condition == "B0" and seed is not None)
-                or (condition != "B0" and (type(seed) is not int or seed not in TRAINING_SEEDS))
-                or (condition, seed) in entries):
-            raise ValueError(f"Unexpected or repeated policy condition and seed: {condition}, {seed}")
-        entries[condition, seed] = entry
-    order = [("B0", None), *((condition, seed) for condition in TRAINED for seed in TRAINING_SEEDS)]
-    if entries.keys() != set(order):
-        raise ValueError("Expected one B0 and all three training seeds for each trained condition")
-
-    # Draw 25 clusters independently inside each fixed task. Every policy and
-    # training seed sees the same indices and both repetitions of every draw.
-    rng = np.random.default_rng(BOOTSTRAP_SEED)
-    indices = rng.integers(len(TRIALS), size=(replicates, len(TASKS), len(TRIALS)))
-    task_axis = np.arange(len(TASKS))[:, None]
+def _analyze_panel(entries, order, root, split_path, panel, replicates):
+    expected = _expected_panel(split_path, panel)
+    # Draw initial-state clusters independently inside each fixed task. Every
+    # policy and training seed uses the same draws and all repetitions per state.
+    rng = np.random.default_rng(panel.bootstrap_seed)
+    trial_count, task_count = len(panel.trials), len(panel.tasks)
+    indices = rng.integers(trial_count, size=(replicates, task_count, trial_count))
+    task_axis = np.arange(task_count)[:, None]
     scores, bootstraps, policy_results, used_journals = {}, {}, [], set()
     for label in order:
-        success, steps, journals = _read_policy(entries[label], manifest_path.parent, expected)
+        success, steps, journals = _read_policy(entries[label], root, expected, panel)
         paths = {journal["path"] for journal in journals}
         if paths & used_journals:
             raise ValueError("A journal was reused for two policy entries")
         used_journals.update(paths)
         scores[label] = success, steps
         bootstraps[label] = success.mean(axis=-1)[task_axis, indices].mean(axis=-1)
-        policy_results.append(_policy_result(*label, success, steps, journals, bootstraps[label]))
+        policy_results.append(_policy_result(*label, success, steps, journals, bootstraps[label], panel))
 
     condition_results = {}
     for condition in CONDITIONS:
@@ -242,24 +253,53 @@ def analyze(manifest_path, split_path=DEFAULT_SPLIT, *, replicates=BOOTSTRAP_REP
             "training_seed_variability": _spread(values) if condition != "B0" else None,
             "per_task_success_rate": {
                 str(task): statistics.mean(row["per_task"][str(task)]["success_rate"] for row in individual)
-                for task in TASKS
+                for task in panel.tasks
             },
         }
 
     return {
-        "schema_version": 1, "protocol_id": "xvla-20261110", "suite": "libero_spatial",
-        "panel_role": "final_H", "input_manifest_sha256": hashlib.sha256(contents).hexdigest(),
-        "split_sha256": SPLIT_SHA256, "task_ids": TASKS, "trial_ids": TRIALS,
-        "repetitions_per_state": REPETITIONS, "horizon_policy_steps": HORIZON,
+        "panel_role": panel.role, "task_ids": panel.tasks, "trial_ids": panel.trials,
+        "repetitions_per_state": panel.repetitions, "horizon_policy_steps": HORIZON,
         "interval": {"method": "paired_initial_state_cluster_percentile_bootstrap",
-                     "confidence_level": 0.95, "replicates": replicates, "rng_seed": BOOTSTRAP_SEED,
+                     "confidence_level": 0.95, "replicates": replicates, "rng_seed": panel.bootstrap_seed,
                      "tasks": "fixed; stratified by task", "training_seeds": "fixed; equally weighted"},
         "policies": policy_results, "conditions": condition_results,
         "contrasts": {
-            f"{left}-{right}": _contrast(left, right, role, scores, bootstraps)
-            for left, right, role in CONTRASTS
+            f"{left}-{right}": _contrast(left, right, role, scores, bootstraps, panel.tasks)
+            for left, right, role in panel.contrasts
         },
     }
+
+
+def analyze(manifest_path, split_path=DEFAULT_SPLIT, *, replicates=BOOTSTRAP_REPLICATES):
+    if type(replicates) is not int or replicates < 2:
+        raise ValueError("At least two bootstrap replicates are required")
+    manifest_path = Path(manifest_path).resolve()
+    contents = manifest_path.read_bytes()
+    manifest = json.loads(contents)
+    entries = {}
+    for entry in manifest["policies"]:
+        condition, seed = entry["condition"], entry["seed"]
+        if (condition not in CONDITIONS or (condition == "B0" and seed is not None)
+                or (condition != "B0" and (type(seed) is not int or seed not in TRAINING_SEEDS))
+                or (condition, seed) in entries):
+            raise ValueError(f"Unexpected or repeated policy condition and seed: {condition}, {seed}")
+        entries[condition, seed] = entry
+    order = [("B0", None), *((condition, seed) for condition in TRAINED for seed in TRAINING_SEEDS)]
+    if entries.keys() != set(order):
+        raise ValueError("Expected one B0 and all three training seeds for each trained condition")
+    with_source_a = [SOURCE_A_PANEL.journal_key in entry for entry in entries.values()]
+    if any(with_source_a) and not all(with_source_a):
+        raise ValueError("Independent source A analysis requires a journal for every policy")
+    root, split_path = manifest_path.parent, Path(split_path)
+    result = {
+        "schema_version": 1, "protocol_id": "xvla-20261110", "suite": "libero_spatial",
+        "input_manifest_sha256": hashlib.sha256(contents).hexdigest(), "split_sha256": SPLIT_SHA256,
+        **_analyze_panel(entries, order, root, split_path, H_PANEL, replicates),
+    }
+    if all(with_source_a):
+        result["source_a"] = _analyze_panel(entries, order, root, split_path, SOURCE_A_PANEL, replicates)
+    return result
 
 
 def main(argv=None):

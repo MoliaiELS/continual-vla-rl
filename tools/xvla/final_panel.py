@@ -1,4 +1,4 @@
-"""Evaluate fixed E3 endpoint policies on the sealed Spatial H panel."""
+"""Evaluate fixed E3 endpoint policies on sealed Spatial source and H panels."""
 from __future__ import annotations
 
 import argparse
@@ -22,6 +22,19 @@ PROTOCOL = Path("configs/xvla/protocol_20261110")
 RUN_PROTOCOL = Path("protocol_20261110")
 H_TASKS = (5, 6, 7, 8, 9)
 H_TRIALS = range(5, 30)
+SOURCE_A_TRIALS = range(40, 50)
+SOURCE_A_REPETITIONS = 5
+
+
+def trial_shard(task, trials, repetitions):
+    task_id = task["task_id"]
+    return [
+        {"task_id": task_id, "trial_id": trial, "repetition_index": rep,
+         "environment_seed": 142 + trial + 1000 * rep,
+         "policy_seed": 10000 + 100 * task_id + trial + 1000 * rep,
+         "initial_state_sha256": task["state_sha256_by_trial_id"][trial]}
+        for trial in trials for rep in range(repetitions)
+    ]
 
 
 def trial_panels(split):
@@ -33,13 +46,22 @@ def trial_panels(split):
             or panel["policy_seed_rule"] != "10000 + 100 * task_id + trial_id + 1000 * repetition_index"):
         raise ValueError("H differs from the frozen Spatial panel")
     tasks = {task["task_id"]: task for task in split["tasks"]}
-    return [[
-        {"task_id": task, "trial_id": trial, "repetition_index": rep,
-         "environment_seed": 142 + trial + 1000 * rep,
-         "policy_seed": 10000 + 100 * task + trial + 1000 * rep,
-         "initial_state_sha256": tasks[task]["state_sha256_by_trial_id"][trial]}
-        for trial in H_TRIALS for rep in range(2)
-    ] for task in H_TASKS]
+    return [trial_shard(tasks[task], H_TRIALS, 2) for task in H_TASKS]
+
+
+def source_a_panel(split, audit, split_sha, manifest_sha):
+    source = next(task for task in split["tasks"] if task["task_id"] == 0)
+    sealed = [role["range_inclusive"] for role in source["trial_roles"]
+              if role["role"] == "source_final_test_sealed"]
+    if (split["source_A"] != 0 or sealed != [[40, 49]]
+            or split["common_evaluation"]["source_final_test_trial_ids"] != list(SOURCE_A_TRIALS)
+            or audit["status"] != "PASS" or audit["audit_scope"] != "libero_spatial_task0_source"
+            or audit["split_sha256"] != split_sha or audit["demo_manifest_sha256"] != manifest_sha
+            or audit["role_sizes"]["source_final_test_sealed"] != len(SOURCE_A_TRIALS)
+            or audit["state_hashes_match_split"] is not True or audit["policy_env_steps"] != 0
+            or audit["sealed_role_overlaps"] or audit["success_during_reset_ids"]["source_final_test_sealed"]):
+        raise ValueError("Independent source A requires the frozen split and successful E1 layout audit")
+    return trial_shard(source, SOURCE_A_TRIALS, SOURCE_A_REPETITIONS)
 
 
 def slurm_status(jobs):
@@ -97,10 +119,19 @@ def build_plan(repo, data, partition, commit):
             raise ValueError("H requires the preregistered 200k-control-step PPO endpoint")
         policies.append(checked_policy(data, condition, seed, job, Path(last["checkpoint_path"]),
                                        last["checkpoint_sha256"]))
-    return {"schema_version": 1, "protocol_id": registry["protocol_id"], "evaluation_commit": commit,
+    split = read(split_path)
+    shards = trial_panels(split)
+    physical = read(data / RUN_PROTOCOL / "e2_dispatch.json")["e1"]["physical"]
+    audit_path = data / "runs" / physical["job_id"] / "e1_source_audit.json"
+    audit_sha = digest(audit_path)
+    audit = read(audit_path)
+    if audit_sha != physical["summary_sha256"] or audit["job_id"] != physical["job_id"]:
+        raise ValueError("E1 source layout audit differs from the registered evidence")
+    return {"schema_version": 2, "protocol_id": registry["protocol_id"], "evaluation_commit": commit,
             "e3_commit": e3["commit"], "e3_dispatch_sha256": digest(dispatch_path), "split_sha256": split_sha,
             "primary_comparison": ["M", "B2"], "policy_path": "deployed", "horizon": 800,
-            "shards": trial_panels(read(split_path)), "policies": policies}
+            "shards": shards, "policies": policies, "source_a_audit_sha256": audit_sha,
+            "source_a_shard": source_a_panel(split, audit, split_sha, source["manifest_sha256"])}
 
 
 def submit_next(repo, data, partition):
@@ -149,10 +180,13 @@ def submit_next(repo, data, partition):
             run_dir = data / "runs" / job
             receipt = read(run_dir / "final_h_summary.json")
             episodes = run_dir / "final_h_episodes.jsonl"
+            source_a = run_dir / "task_0/benchmark_episodes.jsonl"
             if (receipt["status"] != "PASS" or receipt["job_id"] != job or receipt["plan_sha256"] != plan_sha
-                    or receipt["policy_index"] != index or receipt["episodes_sha256"] != digest(episodes)):
-                raise ValueError(f"H completion evidence differs for job {job}")
-            results.append({**policy, "job_id": job, "episodes": str(episodes)})
+                    or receipt["policy_index"] != index or receipt["episodes_sha256"] != digest(episodes)
+                    or receipt["source_a"]["episodes_sha256"] != digest(source_a)):
+                raise ValueError(f"Final evaluation evidence differs for job {job}")
+            results.append({**policy, "job_id": job, "episodes": str(episodes),
+                            "source_a_episodes": str(source_a)})
         analysis_manifest = folder / "final_h_analysis_manifest.json"
         write(analysis_manifest, {"plan_sha256": plan_sha, "policies": results})
         print(json.dumps({"state": "COMPLETE", "analysis_manifest": str(analysis_manifest)}))
@@ -170,29 +204,37 @@ def evaluate(plan_path, plan_sha, index):
     policy = plan["policies"][index]
     job = os.environ["SLURM_JOB_ID"]
     root = Path(os.environ["XVLA_RUN_DIR"])
+
+    def evaluate_shard(panel):
+        task = panel[0]["task_id"]
+        output = root / f"task_{task}"
+        output.mkdir()
+        os.environ["XVLA_RUN_DIR"] = str(output)
+        benchmark.main([
+            "--model", policy["model"], "--checkpoint", policy["checkpoint"], "--policy-path", "deployed",
+            "--expected-checkpoint-sha256", policy["checkpoint_sha256"],
+        ], trial_plan=panel)
+        summary = read(output / "benchmark_summary.json")
+        if (summary["status"] != "PASS" or summary["completed_episodes"] != len(panel)
+                or summary["trial_plan"] != panel or summary["job_id"] != job):
+            raise RuntimeError(f"Incomplete final evaluation for task {task} on job {job}")
+        return {"successes": summary["successes"], "episodes": len(panel)}, output / "benchmark_episodes.jsonl"
+
     summaries = {}
-    with (root / "final_h_episodes.jsonl").open("x", encoding="utf-8") as journal:
-        try:
+    try:
+        source_a, source_a_episodes = evaluate_shard(plan["source_a_shard"])
+        source_a["episodes_sha256"] = digest(source_a_episodes)
+        with (root / "final_h_episodes.jsonl").open("x", encoding="utf-8") as journal:
             for panel in plan["shards"]:
-                task = panel[0]["task_id"]
-                output = root / f"task_{task}"
-                output.mkdir()
-                os.environ["XVLA_RUN_DIR"] = str(output)
-                benchmark.main([
-                    "--model", policy["model"], "--checkpoint", policy["checkpoint"], "--policy-path", "deployed",
-                    "--expected-checkpoint-sha256", policy["checkpoint_sha256"],
-                ], trial_plan=panel)
-                summary = read(output / "benchmark_summary.json")
-                if (summary["status"] != "PASS" or summary["completed_episodes"] != len(panel)
-                        or summary["trial_plan"] != panel or summary["job_id"] != job):
-                    raise RuntimeError(f"Incomplete H task {task} on job {job}")
-                summaries[str(task)] = {"successes": summary["successes"], "episodes": len(panel)}
-                journal.write((output / "benchmark_episodes.jsonl").read_text(encoding="utf-8"))
-        finally:
-            os.environ["XVLA_RUN_DIR"] = str(root)
+                summary, episodes = evaluate_shard(panel)
+                summaries[str(panel[0]["task_id"])] = summary
+                journal.write(episodes.read_text(encoding="utf-8"))
+    finally:
+        os.environ["XVLA_RUN_DIR"] = str(root)
     write(root / "final_h_summary.json", {
         "status": "PASS", "job_id": job, "plan_sha256": plan_sha, "policy_index": index,
-        "policy": policy, "per_task": summaries, "episodes_sha256": digest(root / "final_h_episodes.jsonl"),
+        "policy": policy, "per_task": summaries, "source_a": source_a,
+        "episodes_sha256": digest(root / "final_h_episodes.jsonl"),
     })
 
 
