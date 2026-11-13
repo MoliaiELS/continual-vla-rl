@@ -11,10 +11,12 @@ from types import SimpleNamespace
 if __package__:
     from .e2_dispatch import fixed_commit, read, write
     from .e3_dispatch import POOLS, SEEDS, digest, schedule
+    from .gpu_capacity import available_gpu_model
     from .submit import submit_locked
 else:
     from e2_dispatch import fixed_commit, read, write
     from e3_dispatch import POOLS, SEEDS, digest, schedule
+    from gpu_capacity import available_gpu_model
     from submit import submit_locked
 
 
@@ -165,10 +167,10 @@ def submit_next(repo, data, partition):
         results = []
         for index, policy in enumerate(plan["policies"]):
             if index not in receipts:
-                args = SimpleNamespace(repo=repo, data=data, partition=partition, mode="benchmark_protocol_final",
-                                       gpus=1, gpu_model="4090")
                 with (data / "submit.lock").open("a") as submit_lock:
                     fcntl.flock(submit_lock, fcntl.LOCK_EX)
+                    args = SimpleNamespace(repo=repo, data=data, partition=partition, mode="benchmark_protocol_final",
+                                           gpus=1, gpu_model=available_gpu_model(partition) or "4090")
                     submit_locked(args, None, [str(plan_path), plan_sha, str(index)], benchmark=policy,
                                   walltime="04:00:00")
                 return

@@ -1,8 +1,10 @@
 import os
 from pathlib import Path
+import sys
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from tools.xvla import final_panel
 from xvla_rlinf import benchmark
@@ -55,6 +57,30 @@ class FinalPanelTests(unittest.TestCase):
             })
             with self.assertRaisesRegex(ValueError, "H remains sealed"):
                 final_panel.build_plan(root, root, "GPU", "commit")
+
+    def test_submission_chooses_gpu_without_changing_the_locked_plan(self):
+        policy = {"condition": "B0", "seed": None}
+        plan = {"policies": [policy]}
+        for available, expected in (("4090", "4090"), ("3090", "3090"), (None, "4090")):
+            with self.subTest(available=available), TemporaryDirectory() as directory:
+                root = Path(directory)
+                folder = root / final_panel.RUN_PROTOCOL
+                folder.mkdir()
+                lock = SimpleNamespace(flock=Mock(), LOCK_EX=1)
+                with (patch.dict(sys.modules, {"fcntl": lock}),
+                      patch.object(final_panel, "fixed_commit", return_value="commit"),
+                      patch.object(final_panel, "build_plan", return_value=plan),
+                      patch.object(final_panel, "available_gpu_model", return_value=available) as capacity,
+                      patch.object(final_panel, "submit_locked") as submit):
+                    final_panel.submit_next(root, root, "GPU")
+                capacity.assert_called_once_with("GPU")
+                args, conversion, extra = submit.call_args.args
+                self.assertEqual((args.mode, args.gpus, args.gpu_model), ("benchmark_protocol_final", 1, expected))
+                self.assertIsNone(conversion)
+                plan_path = folder / "final_h_plan.json"
+                self.assertEqual(final_panel.read(plan_path), plan)
+                self.assertEqual(extra, [str(plan_path), final_panel.digest(plan_path), "0"])
+                self.assertEqual(submit.call_args.kwargs, {"benchmark": policy, "walltime": "04:00:00"})
 
     def test_evaluate_keeps_source_a_out_of_h_journal(self):
         with TemporaryDirectory() as directory:
