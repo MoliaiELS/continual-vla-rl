@@ -15,8 +15,10 @@ import subprocess
 import sys
 import time
 import traceback
+from types import SimpleNamespace
 
 from . import protocol as p
+from .official_rollout import CLIENT_SHA256, execute, load_official_rollout
 
 
 HERE = Path(__file__).resolve().parent
@@ -121,10 +123,10 @@ def common_row(args, fingerprint):
 
 
 def make_seed(row, index, seed, signature):
-    scope = [row[key] for key in ("protocol", "phase", "task", "condition")]
-    return dict(episode_id="/".join([*scope, f"{index + 1:04d}"]), index=index,
+    scope = [row[key] for key in ("phase", "task", "condition")]
+    return dict(episode_id="/".join([row["protocol"], *scope, f"{index + 1:04d}"]), index=index,
                 requested_seed=seed, actual_seed=seed,
-                policy_seed=int(digest([*scope, seed])[:15], 16), batch=index // 100 + 1,
+                policy_seed=int(digest([p.POLICY_SEED_NAMESPACE, *scope, seed])[:15], 16), batch=index // 100 + 1,
                 scene_signature=signature)
 
 
@@ -442,7 +444,7 @@ def save_video(shard, episode, status, frames):
     return f"videos/{name}"
 
 
-def run_eval(args, shard, header, module, cls, cfg, policy, seeds, task):
+def run_eval(args, shard, header, module, cls, cfg, policy, official, seeds, task):
     path = shard / "episodes.jsonl"
     rows = resume_journal(path)
     validate_rows(rows, header)
@@ -486,11 +488,10 @@ def run_eval(args, shard, header, module, cls, cfg, policy, seeds, task):
                     record["observations_ok"] = True
                     return values
 
-                from types import SimpleNamespace
                 collect = min(counts["success"], counts["failure"]) < VIDEO_PER_OUTCOME
                 with count_actions(env, budget):
-                    status, reason = p.rollout(env, SimpleNamespace(step=step), budget,
-                                               (lambda image: frames.append(image.copy())) if collect else None)
+                    status, reason, frames = execute(official, env, SimpleNamespace(step=step), budget,
+                                                     return_frames=collect)
                 record.update(status=status, reason=reason, official_success_evaluated=budget.anchors > 0)
             except Exception as error:
                 record.update(status="technical_error" if attempt < MAX_ATTEMPTS else "unresolved",
@@ -572,19 +573,21 @@ def main():
         parser.error("Coverage probe limit is one episode")
     if args.phase == "formal" and args.limit != prescribed:
         parser.error(f"Formal limit is fixed at {prescribed} for this task")
-    if args.stage == "parity" and (args.phase != "smoke" or args.xvla_root is None):
-        parser.error("Parity requires --phase smoke and a pinned --xvla-root")
-    if args.stage != "screen" and args.checkpoint is None:
-        parser.error("This stage needs --checkpoint")
+    if args.stage == "parity" and args.phase != "smoke":
+        parser.error("Parity requires --phase smoke")
+    if args.stage != "screen" and (args.checkpoint is None or args.xvla_root is None):
+        parser.error("This stage needs --checkpoint and a pinned --xvla-root")
 
     pinned_checkout(args.robotwin_root, p.ROBOTWIN_COMMIT)
     if args.xvla_root:
         pinned_checkout(args.xvla_root, p.XVLA_COMMIT)
     config_hashes = {name: sha256(args.robotwin_root / name) for name in FILES}
-    files = ("runner.py", "protocol.py", "parity.py", "bind_renderer.py", "runtime.env", "requirements.txt")
+    files = ("runner.py", "protocol.py", "official_rollout.py", "parity.py", "bind_renderer.py", "runtime.env",
+             "requirements.txt")
     source_hashes = {name: sha256(HERE / name) for name in files}
     basis = dict(robotwin_commit=p.ROBOTWIN_COMMIT, xvla_commit=p.XVLA_COMMIT, rlinf_commit=p.RLINF_COMMIT,
                  model_id=p.MODEL_ID, model_revision=p.MODEL_REVISION, config_sha256=config_hashes,
+                 official_client_sha256=CLIENT_SHA256, policy_seed_namespace=p.POLICY_SEED_NAMESPACE,
                  evaluation_source_sha256=source_hashes)
     fingerprint = digest(basis)
     header = common_row(args, fingerprint)
@@ -600,6 +603,7 @@ def main():
             raise ValueError("No complete frozen seed manifest for the requested panel")
         if args.stage == "eval" and already_evaluated(args, shard, panel["episodes"], header):
             return
+        official = load_official_rollout(args.xvla_root)
         import torch
         policy, receipt = checkpoint(args.checkpoint, args.device, args.verify_weights)
         runtime = {**header, **basis, "slurm_job": os.environ.get("SLURM_JOB_ID"),
@@ -622,9 +626,9 @@ def main():
         write_json(audit_dir / f"{args.stage}-{runtime['slurm_job'] or 'local'}-{time.time_ns()}.json", runtime)
         if args.stage == "parity":
             from .parity import run_parity
-            run_parity(args, shard, header, module, cls, cfg, policy, panel["episodes"][0], task)
+            run_parity(args, shard, header, module, cls, cfg, policy, official, panel["episodes"][0], task)
         else:
-            run_eval(args, shard, header, module, cls, cfg, policy, panel["episodes"], task)
+            run_eval(args, shard, header, module, cls, cfg, policy, official, panel["episodes"], task)
 
 
 if __name__ == "__main__":

@@ -71,10 +71,11 @@ def run_lane(args, job, output, code):
                 base = ["--robotwin-root", os.environ["FYP_ROBOTWIN_ROOT"], "--task", task, "--condition", condition,
                         "--phase", args.mode if smoke else "formal", "--output", str(output),
                         "--limit", str(1 if args.mode == "coverage" else 5 if smoke else 300 if task in PRIORITY else 100)]
-                model = ["--checkpoint", os.environ["FYP_ROBOTWIN_MODEL"]]
+                model = ["--checkpoint", os.environ["FYP_ROBOTWIN_MODEL"],
+                         "--xvla-root", os.environ["FYP_ROBOTWIN_XVLA"]]
                 steps = [("screen", []), ("eval", model + ["--batch", str(batch)])]
                 if args.mode == "smoke":
-                    steps.insert(1, ("parity", model + ["--xvla-root", os.environ["FYP_ROBOTWIN_XVLA"]]))
+                    steps.insert(1, ("parity", model))
                 ok = True
                 for step, opts in steps:
                     started = time.monotonic()

@@ -11,6 +11,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 from . import protocol as p
+from .official_rollout import execute
 
 
 def require(condition, message):
@@ -78,11 +79,11 @@ def reference_client(xvla_root, policy, seed, expected_inputs, stats):
             raise RuntimeError(f"Original /act failed: {response.body.decode()}")
         return SimpleNamespace(json=lambda: json.loads(response.body))
 
-    client = extract(client_file, ("quat_to_rotate6D", "rotate6D_to_quat", "ClientModel", "_rollout"),
+    client = extract(client_file, ("quat_to_rotate6D", "ClientModel"),
                      dict(np=np, R=R, requests=SimpleNamespace(post=post), json_numpy=json_numpy,
                           tqdm=lambda iterable: iterable))
     stats.update(official_client_sha256=sha256(client_file), official_model_source_sha256=sha256(source))
-    return client["ClientModel"]("in-process", 0), client["_rollout"]
+    return client["ClientModel"]("in-process", 0)
 
 
 @contextmanager
@@ -129,18 +130,29 @@ def scene_difference(first, second):
 
 def compare_trajectories(first, second):
     command_diff, tcp_diff, tick_deltas = [], [], []
+    position_diff, rotation_diff, gripper_diff = [], [], []
     for (command_a, state_a, ticks_a), (command_b, state_b, ticks_b) in zip(first, second):
         command_diff.append(float(np.max(np.abs(command_a - command_b))))
+        position_diff.extend(float(np.linalg.norm(state_a[offset:offset + 3] - state_b[offset:offset + 3]))
+                             for offset in (0, 7))
+        gripper_diff.append(float(np.max(np.abs(state_a[14:16] - state_b[14:16]))))
         # q and -q are equivalent for measured poses only. Commands must match
         # the official raw quaternion slots exactly as delivered to RoboTwin.
         state_b = state_b.copy()
         for offset in (3, 10):
-            if np.dot(state_a[offset:offset + 4], state_b[offset:offset + 4]) < 0:
+            q_a, q_b = state_a[offset:offset + 4], state_b[offset:offset + 4]
+            dot = np.dot(q_a, q_b)
+            rotation_diff.append(float(2 * np.arccos(np.clip(abs(dot) / np.linalg.norm(q_a) / np.linalg.norm(q_b),
+                                                           0.0, 1.0))))
+            if dot < 0:
                 state_b[offset:offset + 4] *= -1
         tcp_diff.append(float(np.max(np.abs(state_a - state_b))))
         tick_deltas.append(ticks_a - ticks_b)
     return dict(command_max_abs_diff=max(command_diff, default=None),
                 trajectory_max_abs_diff=max(tcp_diff, default=None),
+                tcp_position_max_m=max(position_diff, default=None),
+                tcp_rotation_max_rad=max(rotation_diff, default=None),
+                gripper_max_abs_diff=max(gripper_diff, default=None),
                 anchors_compared=len(tick_deltas),
                 tick_deltas_by_anchor=tick_deltas,
                 first_tick_divergence_anchor=next((i for i, delta in enumerate(tick_deltas, 1) if delta), None),
@@ -155,28 +167,31 @@ def compare_calls(first, second):
                 second=second[index] if index < len(second) else None)
 
 
-def run_parity(args, shard, header, module, cls, cfg, policy, seed, task):
+class ReplayChunksExhausted(RuntimeError):
+    """An independent scene needed a new query after the recorded run ended."""
+
+
+def run_parity(args, shard, header, module, cls, cfg, policy, official_rollout, seed, task):
     from .runner import count_actions, emit, init_success_fields, reset_env, same_scene, scene_values, write_json
 
     result = {**header, "episode_id": seed["episode_id"], "actual_seed": seed["actual_seed"],
               "policy_seed": seed["policy_seed"], "instruction": task["prompt"],
               "status": "fail", "queries_compared": 0, "anchors_compared": 0,
-              "same_observation_comparison": True, "same_predicted_chunks_replayed": True,
+              "same_observation_comparison": True, "shared_authoritative_rollout": True,
               "action_max_abs_diff": None, "command_max_abs_diff": None,
-              "trajectory_max_abs_diff": None, "unused_front_view_fallback": False}
+              "unused_front_view_fallback": False}
     expected_inputs = {}
-    chunks = []
-    native_steps, replay_steps = [], []
-    native_calls, replay_calls = [], []
+    chunks, expected_commands = [], []
+    steps, calls = [], []
     env = None
     try:
-        official, original_rollout = reference_client(args.xvla_root, policy, seed["policy_seed"],
-                                                       expected_inputs, result)
+        official = reference_client(args.xvla_root, policy, seed["policy_seed"], expected_inputs, result)
         policy.begin(task["prompt"], seed["policy_seed"])
         official.set_instruction(task["prompt"])
 
         def cross_check(obs):
-            native_calls.append("query")
+            calls.append("query")
+            require(result["anchors_compared"] == len(expected_commands), "A query skipped verified anchors")
             expected_inputs.clear()
             expected_inputs.update(policy.inputs(obs))
             predicted = policy.rng.call(policy.model.generate_actions, **expected_inputs,
@@ -193,7 +208,16 @@ def run_parity(args, shard, header, module, cls, cfg, policy, seed, task):
             np.testing.assert_allclose(official_action, predicted, rtol=1e-5, atol=1e-6)
             result["queries_compared"] += 1
             chunks.append(predicted)
+            expected_commands.extend(p.actions_to_env(predicted))
             return predicted
+
+        def check_command(command, action_type):
+            index = result["anchors_compared"]
+            require(action_type == "ee" and index < len(expected_commands), "Unexpected official command")
+            result["command_max_abs_diff"] = max(result["command_max_abs_diff"] or 0.0,
+                                                 float(np.max(np.abs(command - expected_commands[index]))))
+            np.testing.assert_array_equal(command, expected_commands[index])
+            result["anchors_compared"] += 1
 
         def reset(budget, name):
             instance = cls()
@@ -211,66 +235,48 @@ def run_parity(args, shard, header, module, cls, cfg, policy, seed, task):
                 raise
             return instance, scene
 
-        def replay(instance, budget, steps, calls):
-            iterator = iter(chunks)
+        budget = p.Budget()
+        env, scene = reset(budget, "authoritative_reset")
+        with count_actions(env, budget), trajectory(env, budget, steps, calls):
+            status, reason, _ = execute(official_rollout, env, SimpleNamespace(step=cross_check), budget,
+                                        check_command=check_command)
+        result.update(authoritative_status=status, authoritative_reason=reason, physics_ticks=budget.physics_ticks,
+                      anchors_sent=budget.anchors_sent, anchors_advanced=budget.anchors, simulator_calls=calls)
+        require(0 < budget.queries == result["queries_compared"] <= p.QUERIES, "Official query accounting differs")
+        require(0 < len(steps) == budget.anchors_sent == result["anchors_compared"] <= p.QUERIES * p.ANCHORS,
+                "Official command accounting differs")
+        require(reason != "invalid_policy_action", "Invalid policy action during parity")
 
-            def step(_obs):
-                calls.append("query")
-                return next(iterator)
-
-            with count_actions(instance, budget), trajectory(instance, budget, steps, calls):
-                success, _ = original_rollout(instance, SimpleNamespace(step=step))
-            return bool(success)
-
-        native_budget = p.Budget()
-        env, native_scene = reset(native_budget, "native_reset")
-        with count_actions(env, native_budget), trajectory(env, native_budget, native_steps, native_calls):
-            native_status, result["native_reason"] = p.rollout(env, SimpleNamespace(step=cross_check), native_budget)
+        # Measure the native environment's repeatability independently. Both
+        # traces now use the identical, hash-verified official control loop.
         env.close_env()
         env = None
-        replay_budget = p.Budget()
-        env, replay_scene = reset(replay_budget, "official_reset")
-        replay_success = replay(env, replay_budget, replay_steps, replay_calls)
-        result.update(native_success=native_status == "success", official_success=replay_success,
-                      native_ticks=native_budget.physics_ticks, official_ticks=replay_budget.physics_ticks,
-                      native_anchors=len(native_steps), official_anchors=len(replay_steps),
-                      reset_pair_scene_max_abs_diff=scene_difference(native_scene, replay_scene),
-                      native_motion_calls=native_calls, official_motion_calls=replay_calls,
-                      first_motion_call_divergence=compare_calls(native_calls, replay_calls),
-                      **compare_trajectories(native_steps, replay_steps))
-        command_diff = result["command_max_abs_diff"]
-        trajectory_diff = result["trajectory_max_abs_diff"]
-        physical_mismatch = (native_budget.physics_ticks != replay_budget.physics_ticks
-                             or result["native_success"] != replay_success
-                             or (trajectory_diff is not None and trajectory_diff > 1e-3))
-        if (physical_mismatch and len(native_steps) == len(replay_steps) and command_diff is not None
-                and command_diff <= 1e-10 and result["first_motion_call_divergence"] is None):
-            # Quantify whether the same client itself varies on an independent
-            # seeded reset. This is diagnostic and cannot pass the parity gate.
-            repeat = {}
-            result["official_repeat"] = repeat
-            repeat_steps, repeat_calls = [], []
-            try:
-                env.close_env()
-                env = None
-                repeat_budget = p.Budget()
-                env, repeat_scene = reset(repeat_budget, "official_repeat_reset")
-                repeat_success = replay(env, repeat_budget, repeat_steps, repeat_calls)
-                repeat.update(success=repeat_success, reference_success=replay_success,
-                              ticks=repeat_budget.physics_ticks, reference_ticks=replay_budget.physics_ticks,
-                              anchors=len(repeat_steps), reference_anchors=len(replay_steps),
-                              reset_pair_scene_max_abs_diff=scene_difference(replay_scene, repeat_scene),
-                              motion_calls=repeat_calls,
-                              first_motion_call_divergence=compare_calls(replay_calls, repeat_calls),
-                              **compare_trajectories(replay_steps, repeat_steps))
-            except Exception:
-                repeat["traceback"] = traceback.format_exc()
-        require(result["native_success"] == result["official_success"], "Official rollout success differs")
-        require(len(native_steps) == len(replay_steps), "Official rollout anchor count differs")
-        require(native_budget.physics_ticks == replay_budget.physics_ticks, "Official rollout tick count differs")
-        require(result["queries_compared"] > 0 and len(native_steps) > 0, "No command traced")
-        require(command_diff <= 1e-10, "Official command arrays differ")
-        require(trajectory_diff <= 1e-3, "Official execution trajectory differs")
+        repeat_budget = p.Budget()
+        env, repeat_scene = reset(repeat_budget, "official_repeat_reset")
+        repeat_steps, repeat_calls = [], []
+        iterator = iter(chunks)
+
+        def replay_step(_obs):
+            repeat_calls.append("query")
+            chunk = next(iterator, None)
+            if chunk is None:
+                raise ReplayChunksExhausted
+            return chunk
+
+        repeat_success = None
+        try:
+            with count_actions(env, repeat_budget), trajectory(env, repeat_budget, repeat_steps, repeat_calls):
+                repeat_success, _ = official_rollout(env, SimpleNamespace(step=replay_step))
+        except ReplayChunksExhausted:
+            pass
+        result["official_repeat"] = dict(
+            success=None if repeat_success is None else bool(repeat_success),
+            recorded_chunks_exhausted=repeat_success is None, ticks=repeat_budget.physics_ticks,
+            anchors=len(repeat_steps), reset_pair_scene_max_abs_diff=scene_difference(scene, repeat_scene),
+            first_motion_call_divergence=compare_calls(calls, repeat_calls),
+            **compare_trajectories(steps, repeat_steps))
+        require(result["official_repeat"]["anchors_compared"] > 0, "No independent reference trajectory measured")
+        require(result["official_repeat"]["command_max_abs_diff"] == 0, "Independent reference command prefix differs")
         result["status"] = "pass"
     except Exception:
         result["traceback"] = traceback.format_exc()

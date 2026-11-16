@@ -22,7 +22,7 @@
 
 ## 初态、统计与产物
 
-- Smoke：`move_stapler_pad`、`turn_switch` × Easy／Hard × 5，使用独立种子。在每个条件的冻结初态上运行原生 client/服务端和本地 runner 的同观测、同噪声对照，并回放同一 chunks 比较命令、轨迹、tick 和成功。四个包装层缺口另做 `coverage`，与正式数据分开。
+- Smoke：`move_stapler_pad`、`turn_switch` × Easy／Hard × 5，使用独立种子。`robotwin-native-b0-v2` 的 smoke 与正式评测共用经 SHA256 校验的作者 `_rollout`，保留 v1 的 policy seed。Smoke 在同一真实观测和同一噪声下比较本地推理与作者 `/act`，逐条核对作者循环发出的命令。在另一份同种子、经核对的初态用同一作者循环重放相同动作，并分开记录 TCP、夹爪、tick 和成功判定。作者若需要超出记录范围的查询，记录已共同执行的轨迹前缀。四个包装层缺口另做 `coverage`，与正式数据分开。
 - 正式：50 个任务每条件首批 100，共 10,000 回合。预先指定 10 个重点任务每条件再各加两批各 100，累计 14,000。批次是 evaluation batches。
 - 固定条件内按候选 seed 升序预筛，正式从 2000 开始，smoke／coverage 使用独立命名空间。通过原生专家成功判定并去重后冻结完整清单及 policy seed，新旧回合不按结果重新抽样。Easy／Hard 的同整数 seed 不作为配对证据。
 - 正常失败只记一次。基础设施异常按相同 seed 有限重试，耗尽记 `unresolved`。保留候选排除记录、每次尝试和回合日志；每个 episode ID 只进入一次分母。计划数、完成数、Wilson 区间和未完成范围通过汇总命令输出。总体与类别以任务等权计算，首批与扩测累计分列。
