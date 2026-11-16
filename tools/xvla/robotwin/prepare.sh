@@ -59,7 +59,9 @@ case "${1:?prepare mode}" in
             test "$(realpath "$robot/assets/$asset")" = "$tree/$asset"
         done
         (cd "$robot" && "$prefix/bin/python" script/update_embodiment_config_path.py)
-        test -s "$robot/assets/embodiments/aloha-agilex/curobo.yml"
+        for arm in left right; do
+            test -s "$robot/assets/embodiments/aloha-agilex/curobo_${arm}.yml"
+        done
         echo ROBOTWIN_LINK_READY
         ;;
     *) exit 2 ;;

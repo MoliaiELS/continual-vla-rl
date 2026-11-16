@@ -15,7 +15,9 @@ else
     test -s "$data/evidence/build.complete"
     if [[ "$mode" != probe ]]; then
         test -s "$data/models/X-VLA-RoboTwin2--${MODEL_REV:0:12}/verified.json"
-        test -s "$FYP_ROBOTWIN_CODE/RoboTwin-$ROBOTWIN_REV/assets/embodiments/aloha-agilex/curobo.yml"
+        for arm in left right; do
+            test -s "$FYP_ROBOTWIN_CODE/RoboTwin-$ROBOTWIN_REV/assets/embodiments/aloha-agilex/curobo_${arm}.yml"
+        done
     fi
     # Count every own allocated or pending GPU, including other FYP runs, and
     # refuse a third. Jobs are submitted one at a time under this suite's lock.
