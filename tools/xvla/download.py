@@ -65,7 +65,7 @@ def verify_file(path, entry):
             "lfs_sha256": expected_sha, "git_blob_sha1": git_blob}
 
 
-def download_file(repo, revision, entry, dest, endpoint):
+def download_file(repo, revision, entry, dest, endpoint, repo_type="model"):
     import requests
 
     filename = _value(entry, "rfilename")
@@ -91,7 +91,8 @@ def download_file(repo, revision, entry, dest, endpoint):
             _log("resume_prefix_copied", file=filename, bytes=partial.stat().st_size)
     if partial.exists() and partial.stat().st_size > size:
         raise ValueError("Resume file exceeds metadata size; manual audit required")
-    url = f"{endpoint.rstrip('/')}/{repo}/resolve/{revision}/{quote(filename, safe='/')}"
+    namespace = "datasets/" if repo_type == "dataset" else ""
+    url = f"{endpoint.rstrip('/')}/{namespace}{repo}/resolve/{revision}/{quote(filename, safe='/')}"
     failures, hash_restarts, last_report = 0, 0, 0
     while True:
         offset = partial.stat().st_size if partial.exists() else 0

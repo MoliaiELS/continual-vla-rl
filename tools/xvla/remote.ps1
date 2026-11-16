@@ -1,5 +1,5 @@
 param(
-    [Parameter(Position=0)][ValidateSet('audit','sync','bootstrap','download','submit','status','logs','session','e2-start','e2-status','e3-start','e3-status','final-submit')][string]$Command='audit',
+    [Parameter(Position=0)][ValidateSet('audit','sync','bootstrap','download','submit','status','logs','session','e2-start','e2-status','e3-start','e3-status','final-submit','robotwin-prepare','robotwin-status','robotwin-logs')][string]$Command='audit',
     [Parameter(Position=1)][string]$Value='unit',
     [ValidateSet('libero','pt','robotwin')][string]$Model='libero',
     [int]$Gpus=1,
@@ -24,8 +24,11 @@ $repoRoot=Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $settings=Import-PowerShellDataFile "$repoRoot/tools/idac/settings.psd1"
 $data="$($settings.DataRoot)/xvla"
 $prefix="$($settings.CondaRoot)/envs/xvla_rlinf"
+$robotData="$data/robotwin-b0"
+$robotPrefix="$($settings.CondaRoot)/envs/xvla_robotwin_b0"
+$robotCode="$($settings.CodeRoot)-RobotwinB0"
 function Invoke-XRemote([string]$Script) {
-    $preamble="export FYP_DATA_ROOT='$($settings.DataRoot)' FYP_CONDA_ROOT='$($settings.CondaRoot)' FYP_XVLA_DATA='$data' FYP_XVLA_ENV='$prefix'`n"
+    $preamble="export FYP_DATA_ROOT='$($settings.DataRoot)' FYP_CONDA_ROOT='$($settings.CondaRoot)' FYP_XVLA_DATA='$data' FYP_XVLA_ENV='$prefix' FYP_ROBOTWIN_DATA='$robotData' FYP_ROBOTWIN_ENV='$robotPrefix' FYP_ROBOTWIN_CODE='$robotCode'`n"
     if ($Command -in @('e2-start','e3-start','final-submit')) {
         $preamble += @'
 if [[ -f "$FYP_XVLA_DATA/protocol_20261110/archive.json" ]]; then
@@ -40,6 +43,27 @@ fi
 $sha=(& git -C $repoRoot rev-parse HEAD).Trim()
 $snapshot="$($settings.RunCodeRoot)/$sha"
 switch ($Command) {
+ 'robotwin-prepare' {
+  if ($Value -notin @('env','assets','link')) { throw 'Requires env, assets, or link' }
+  Invoke-XRemote @"
+test -f '$snapshot/tools/xvla/robotwin/prepare.sh'
+mkdir -p '$robotData/logs'
+nohup flock -n '$robotData/prepare-$Value.lock' bash '$snapshot/tools/xvla/robotwin/prepare.sh' '$Value' >> '$robotData/logs/prepare-$Value.log' 2>&1 < /dev/null &
+echo ROBOTWIN_PREPARE_PID=`$!
+"@
+ }
+ 'robotwin-status' {
+  Invoke-XRemote @'
+squeue -u "$(id -un)" -o '%i|%j|%T|%M|%b|%R'
+for log in "$FYP_ROBOTWIN_DATA"/logs/{prepare-*,download-robotwin}.log; do
+  if [[ -f "$log" ]]; then echo "--- ${log##*/}"; tail -n 4 "$log"; fi
+done
+'@
+ }
+ 'robotwin-logs' {
+  if ($Value -notmatch '^(\d+|prepare-(env|assets|link)|download-robotwin)$') { throw 'Requires a job ID or preparation status name' }
+  Invoke-XRemote "for ext in log out err; do if test -f '$robotData/logs/$Value'.`$ext; then tail -n 45 '$robotData/logs/$Value'.`$ext; fi; done"
+ }
  'e2-start' {
   if (-not ($DeployedJobId -and $OnlineJobId -and $AuditJobId)) {
    throw 'E2 start requires the deployed, online and physical E1 job IDs'
