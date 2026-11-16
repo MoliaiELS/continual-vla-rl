@@ -26,6 +26,7 @@ $ErrorActionPreference='Stop'
 $OutputEncoding=[Text.UTF8Encoding]::new($false)
 $repoRoot=Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $settings=Import-PowerShellDataFile "$repoRoot/tools/idac/settings.psd1"
+$branch=$settings.Branch
 $data="$($settings.DataRoot)/xvla"
 $prefix="$($settings.CondaRoot)/envs/xvla_rlinf"
 $robotData="$data/robotwin-b0"
@@ -181,14 +182,46 @@ PY
   if ($LASTEXITCODE -ne 0) { throw 'Commit tracked changes before sync' }
   & git -C $repoRoot diff --cached --quiet
   if ($LASTEXITCODE -ne 0) { throw 'Commit staged changes before sync' }
-  & git -C $repoRoot push origin HEAD:refs/heads/codex/xvla-integration
+  Invoke-XRemote @"
+if [[ -n `$(git -C '$($settings.CodeRoot)' status --porcelain) ]]; then
+  echo 'Server RLinf checkout has changes. Commit or stash them explicitly before syncing.' >&2
+  exit 1
+fi
+"@
+  & git -C $repoRoot push origin "HEAD:refs/heads/$branch"
   if ($LASTEXITCODE -ne 0) { throw 'Push failed' }
   Invoke-XRemote @"
-git -C '$($settings.CodeRoot)' fetch origin codex/xvla-integration
-test -e '$snapshot' || git -C '$($settings.CodeRoot)' worktree add --quiet --detach '$snapshot' '$sha'
+code='$($settings.CodeRoot)'
+branch='$branch'
+exec 9>"`$code/.git/fyp-xvla-sync.lock"
+flock 9
+if [[ -n `$(git -C "`$code" status --porcelain) ]]; then
+  echo 'Server RLinf checkout changed during sync. Review it before updating.' >&2
+  exit 1
+fi
+git -C "`$code" fetch origin "refs/heads/`$branch`:refs/remotes/origin/`$branch"
+test "`$(git -C "`$code" rev-parse "origin/`$branch")" = '$sha'
+current=`$(git -C "`$code" symbolic-ref --quiet --short HEAD || true)
+if [[ -z "`$current" ]] && ! git -C "`$code" merge-base --is-ancestor HEAD '$sha'; then
+  echo 'Detached server HEAD is not part of the incoming branch; preserve it before switching.' >&2
+  exit 1
+fi
+if [[ "`$current" != "`$branch" ]]; then
+  if git -C "`$code" show-ref --verify --quiet "refs/heads/`$branch"; then
+    git -C "`$code" switch "`$branch"
+  else
+    git -C "`$code" switch --create "`$branch" --track "origin/`$branch"
+  fi
+fi
+git -C "`$code" merge --ff-only "origin/`$branch"
+test "`$(git -C "`$code" rev-parse HEAD)" = '$sha'
+git -C "`$code" branch --set-upstream-to="origin/`$branch" "`$branch"
+git -C "`$code" submodule update --quiet --init third_party/rlinf
+test -e '$snapshot' || git -C "`$code" worktree add --quiet --detach '$snapshot' '$sha'
+test "`$(git -C '$snapshot' rev-parse HEAD)" = '$sha'
 git -C '$snapshot' submodule update --quiet --init third_party/rlinf
 test "`$(git -C '$snapshot/third_party/rlinf' rev-parse HEAD)" = 1bf78980d9339cbc67497eddceb9a1e3a74e2acc
-echo 'XVLA_SYNC_OK $sha'
+echo 'XVLA_SYNC_OK branch=$branch root=$($settings.CodeRoot) commit=$sha snapshot=$snapshot'
 "@
  }
  'bootstrap' {
