@@ -29,6 +29,7 @@ FILES = (*[f"task_config/{name}.yml" for name in CONDITIONS.values()],
 MAX_ATTEMPTS = 3
 TERMINAL = {"success", "failure", "unresolved"}
 VIDEO_PER_OUTCOME = 2
+MISSING_CLUTTER_URDF = "assets/objects/objaverse/pencil/001/model.urdf"
 
 
 def read_json(path):
@@ -355,12 +356,19 @@ def screen(args, shard, header, cls, cfg):
         except UnStableError as error:
             result = {"status": "excluded", "reason": "unstable_initial_scene", "error": str(error)}
         except Exception as error:
-            result.update(reason=type(error).__name__, traceback=traceback.format_exc())
+            if (args.condition == "hard" and isinstance(error, FileNotFoundError)
+                    and error.filename == MISSING_CLUTTER_URDF):
+                # The verified asset snapshot lists this variant but has no URDF.
+                result = {"status": "excluded", "reason": "missing_pinned_clutter_asset", "asset": MISSING_CLUTTER_URDF}
+            else:
+                result.update(reason=type(error).__name__, traceback=traceback.format_exc())
         finally:
             with suppress(Exception):
                 env.close_env(clear_cache=(seed - seed_start + 1) % cfg["clear_cache_freq"] == 0)
         row.update(result, wall_seconds=time.perf_counter() - started)
         append(path, row)
+        if row["reason"] == "missing_pinned_clutter_asset":
+            env = cls()
         if row["status"] == "technical_error":
             env = cls()  # A failed reset can leave a partially initialized planner.
             attempts[seed] = attempt
