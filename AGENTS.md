@@ -2,6 +2,7 @@
 
 ## 当前状态：旧实验已归档
 
+- 后续 VLA 开发迁至 `MoliaiELS/RLinf-VLA`，在本机使用旁边的 `RLinf-VLA` checkout。该仓库的 `main` 固定为 RLinf 上游 `1bf78980d9339cbc67497eddceb9a1e3a74e2acc`，X-VLA 入口在 `codex/xvla`。当前 Simple Recipe 仓库仍承载已启动的 RoboTwin 固定提交及历史实现。
 - 2026-11-16 按用户要求结束旧 X-VLA-Pt 和 OpenVLA-OFT 实验线。当前状态见 `PROGRESS.md`，结果与目录见 `docs/archive/2026-11-16-experiment-closeout.md`。
 - 当前新实验为 X-VLA 在 RoboTwin 2.0 Easy／Hard 的冻结基座评测，见 `docs/robotwin/README.md`。旧 X-VLA 产物与封存面板、固定提交及收尾归档继续保留。旧 OpenVLA 的服务器清理范围见 `docs/robotwin/status.md`。
 - 日常先改本机，提交后用 `tools/xvla/remote.ps1 sync -RootOnly` 推送并快进服务器 `RLinf` 根目录到当前 X-VLA 分支。该目录用于 SSH 查阅和编辑，存在远端修改时不同步覆盖。准备 Slurm 作业时用不加 `-RootOnly` 的 `sync` 生成 `RLinf-runs/<完整提交>` 固定工作树。

@@ -1,5 +1,7 @@
 # FYP 当前进度
 
+后续模型开发在 [RLinf-VLA 的 `codex/xvla` 分支](https://github.com/MoliaiELS/RLinf-VLA/tree/codex/xvla)。本仓库的登记继续跟踪已经启动、使用旧固定 worktree 的 RoboTwin 评测。
+
 当前工作：X‑VLA 在 RoboTwin 2.0 Easy／Hard 的冻结基座评测。按 [协议](docs/robotwin/README.md)推进；[执行登记](docs/robotwin/status.md)保存最新证据、作业 ID 和恢复入口。已有 X-VLA-Pt 与 OpenVLA-OFT 旧实验继续保留封存状态。
 
 旧实验归档时，北京时间 2026-11-16 19:56 核实 Slurm 运行和排队作业为 0。
