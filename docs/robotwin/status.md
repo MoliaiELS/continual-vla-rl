@@ -26,6 +26,7 @@
 | 旧部署结果和日志 | `<DataRoot>/runs`、`logs`、`reports` | 632 MiB、276 KiB、5.6 MiB。保留可追溯证据。 |
 | LIBERO 原始数据 | `<DataRoot>/datasets/libero_raw` | 2.9 GiB，与旧 LIBERO 研究相关；不归为 OpenVLA 专用权重。 |
 | 旧 Conda 环境 | `<CondaRoot>/envs/vla_budget_rl` | 9.2 GiB。当前 RoboTwin 资产下载与派发器仍使用此环境的 Python，报告与权重下载入口也有引用。不能在本轮运行中移除。 |
+| 旧部署下载与构建缓存 | `<DataRoot>/cache` | 5.7 GiB（pip 4.4 GiB、Conda 735 MiB、wheels 635 MiB）。与 RoboTwin 的独立缓存目录分开；后续清理前按子目录确认是否存在唯一的本地构建 wheel。 |
 | 旧 Conda 缓存、源码 | `<CondaRoot>/pkgs-vla-budget`、服务器 `RLinf/openvla-oft` | 279 MiB、1.4 MiB。Conda 可有硬链接，删除缓存的实际释放量与目录占用不同。代码保留在 Git。 |
 
 恢复命令、证据目录与数值口径见[协议与运行手册](README.md)。
