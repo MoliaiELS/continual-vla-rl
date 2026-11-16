@@ -11,7 +11,9 @@
 | Smoke／对齐／缺口覆盖 | 尚无闭环证据。 |
 | 正式 | 0/14,000，未提交。 |
 
-已启动评测派发器，执行提交 `009f05cfe4de2de9fe4d911b6fd665776add7abc`。状态在 `dispatch/<执行提交>/state.json`，日志在同目录的 `dispatch.log`。探针、资产校验、固定噪声对齐与两条件 smoke 是正式评测门槛。`./tools/xvla/remote.ps1 robotwin-status` 可查询。
+ALOHA AgileX 的冻结资产包含左右臂 CuRobo 模板。准备和提交入口已改为校验生成的 `curobo_left.yml` 与 `curobo_right.yml`。旧派发器 `009f05cfe4de2de9fe4d911b6fd665776add7abc` 在 smoke 前由 `bff9937bec2b3f88b098c41b1d0c6861775ef8cb` 接替，资产下载继续。新派发器提交了探针 `20302`。状态在 `dispatch/<执行提交>/state.json`，日志在同目录的 `dispatch.log`，可通过 `./tools/xvla/remote.ps1 robotwin-status` 查询。
+
+后续开发入口已迁至 [RLinf-VLA 的 `codex/xvla`](https://github.com/MoliaiELS/RLinf-VLA/tree/codex/xvla)。独立的迁移验证作业 `20301` 在 `4090node3` 通过 Vulkan 和 X-VLA GPU 推理探针，退出码 `0:0`。
 
 ## 服务器工作树清理与 OpenVLA 盘点
 
