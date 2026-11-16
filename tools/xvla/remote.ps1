@@ -1,5 +1,5 @@
 param(
-    [Parameter(Position=0)][ValidateSet('audit','sync','bootstrap','download','submit','status','logs','session','e2-start','e2-status','e3-start','e3-status','final-submit','robotwin-prepare','robotwin-status','robotwin-logs','robotwin-submit','robotwin-report')][string]$Command='audit',
+    [Parameter(Position=0)][ValidateSet('audit','sync','bootstrap','download','submit','status','logs','session','e2-start','e2-status','e3-start','e3-status','final-submit','robotwin-prepare','robotwin-status','robotwin-logs','robotwin-submit','robotwin-report','robotwin-run')][string]$Command='audit',
     [Parameter(Position=1)][string]$Value='unit',
     [ValidateSet('libero','pt','robotwin')][string]$Model='libero',
     [int]$Gpus=1,
@@ -50,6 +50,15 @@ $robotSha=$sha
 if ($RobotCommit) { $robotSha=$RobotCommit }
 $robotSnapshot="$($settings.RunCodeRoot)/$robotSha"
 switch ($Command) {
+ 'robotwin-run' {
+  if ($Value -notmatch '^[0-9]+$') { throw 'Requires the CuRobo Slurm build job ID' }
+  Invoke-XRemote @"
+test -f '$robotSnapshot/tools/xvla/robotwin/dispatch.py'
+mkdir -p '$robotData/dispatch/$robotSha'
+nohup flock -n '$robotData/dispatch.lock' '$($settings.CondaRoot)/envs/vla_budget_rl/bin/python' -u '$robotSnapshot/tools/xvla/robotwin/dispatch.py' --build-job '$Value' --partition '$($settings.Partition)' --gpu '$GpuModel' --hours '$RobotHours' >> '$robotData/dispatch/$robotSha/dispatch.log' 2>&1 < /dev/null &
+echo ROBOTWIN_DISPATCH_PID=`$!
+"@
+ }
  'robotwin-submit' {
   if ($Value -notin @('build','probe','smoke','coverage','formal','extension')) { throw 'Requires build, probe, smoke, coverage, formal, or extension' }
   Invoke-XRemote @"
@@ -76,6 +85,9 @@ echo ROBOTWIN_PREPARE_PID=`$!
   Invoke-XRemote @'
 squeue -u "$(id -un)" -o '%i|%j|%T|%M|%b|%R'
 if [[ -f "$FYP_ROBOTWIN_DATA/evidence/jobs.tsv" ]]; then echo '--- submitted jobs'; tail -n 10 "$FYP_ROBOTWIN_DATA/evidence/jobs.tsv"; fi
+for record in "$FYP_ROBOTWIN_DATA"/dispatch/*/dispatch.log; do
+  if [[ -f "$record" ]]; then echo "--- $(dirname "$record")"; tail -n 4 "$record"; fi
+done
 for log in "$FYP_ROBOTWIN_DATA"/logs/{prepare-*,download-robotwin}.log; do
   if [[ -f "$log" ]]; then echo "--- ${log##*/}"; tail -n 4 "$log"; fi
 done

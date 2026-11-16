@@ -445,6 +445,7 @@ def run_eval(args, shard, header, module, cls, cfg, policy, seeds, task):
             raise ValueError(f"Multiple terminal outcomes for {key}")
         latest[key] = row
     counts = {status: sum(row["status"] == status for row in latest.values()) for status in TERMINAL}
+    unresolved = 0
     env = cls()
     for seed in seeds:
         if args.batch is not None and seed["batch"] != args.batch:
@@ -452,6 +453,7 @@ def run_eval(args, shard, header, module, cls, cfg, policy, seeds, task):
         key = seed["episode_id"]
         prior = latest.get(key, {})
         if prior.get("status") in TERMINAL:
+            unresolved += int(prior["status"] == "unresolved")
             continue
         for attempt in range(prior.get("attempt", 0) + 1, MAX_ATTEMPTS + 1):
             start = time.perf_counter()
@@ -502,10 +504,11 @@ def run_eval(args, shard, header, module, cls, cfg, policy, seeds, task):
             append(path, record)
             if status in TERMINAL:
                 counts[status] += 1
+                unresolved += int(status == "unresolved")
                 break
     emit({"event": "shard_eval_finished", **header, **counts})
-    if counts["unresolved"]:
-        raise RuntimeError(f"Shard contains {counts['unresolved']} unresolved episodes")
+    if unresolved:
+        raise RuntimeError(f"Requested batch contains {unresolved} unresolved episodes")
 
 
 def already_evaluated(args, shard, seeds, header):
