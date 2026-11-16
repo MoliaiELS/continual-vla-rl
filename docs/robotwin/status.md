@@ -6,12 +6,16 @@
 | --- | --- |
 | 固定权重 | `2toINF/X-VLA-RoboTwin2@a157c580cfe6f9f445614490f3bec1b2f9ef9f18` 的 6 个文件均已核验；`config.json` 确认 `ee6d`、proprio 开启、30 anchors。权重 SHA256 `3f16a4b67a1d2675fc1cb0350c6d5617522e452f47359e729d74d76b8aa4835b`。路径 `<DataRoot>/xvla/robotwin-b0/models/X-VLA-RoboTwin2--a157c580cfe6`。 |
 | 软件环境 | CuRobo 编译作业 `20298` 在 `3090node1` 完成，`0:0`，7 分 20 秒，`pip check` 通过。GPU 探针 `20299` 在 `4090node3` 完成，`0:0`，1 分 37 秒。获配 GPU 上的 Vulkan 帧有效，冻结权重经完整校验和推理输出 `30×20`，转换得 `30×16`；进程每 5 秒采样显存峰值 4,204 MiB。这是探针证据，未执行 RoboTwin 任务。 |
-| 资产 | 三个冻结 ZIP 共 14,927,288,034 字节。`embodiments.zip` 和 `objects.zip` 已通过 SHA256。`background_texture.zip` 通过镜像继续 8 MiB 分段下载。 |
+| 资产 | 三个冻结 ZIP 共 14,927,288,034 字节，全部通过 SHA256。CPU 作业 `20310` 在 `4090node3` 本地存储用 5 分 49 秒完成解压，随后写入完整资产标记并链接运行目录。 |
 | 任务定义 | [50 项中文任务目录](task-catalog.md)与官方目录、固定作者 client 和原生步数表逐项吻合。 |
-| Smoke／对齐／缺口覆盖 | 固定输入接口作业 `20303` 对齐了模型输出。Easy 诊断 `20304` 完成两个成功回合；20 回合 smoke 及其场景对齐仍待完整资产。 |
+| Smoke／对齐／缺口覆盖 | 完整资产探针 `20309` 通过。Easy 作业 `20311` 在两个任务各冻结 5 个初态后，因物理步数对齐未通过而退出 `1:0`。Hard 作业 `20312` 在 Easy 退出后运行。缺口覆盖待 smoke 验收。 |
 | 正式 | 0/14,000，未提交。 |
 
-ALOHA AgileX 的冻结资产包含左右臂 CuRobo 模板。准备和提交入口校验生成的 `curobo_left.yml` 与 `curobo_right.yml`。修正 Slurm `gres/gpu` 资源计数后，当前派发器固定在 `e194f8269aeb1fb78a05887fdf56d014860e0530`，提交探针 `20305` 后等候完整资产。状态在 `dispatch/<执行提交>/state.json`，日志在同目录的 `dispatch.log`，可通过 `./tools/xvla/remote.ps1 robotwin-status` 查询。
+当前 smoke 派发器固定在 `7a9141c80e0e57e93ac960f8a226eecee1b14fc8`。Slurm 账号 `MaxJobs=1`、`MaxSubmitJobs=2`，此次两路单卡作业串行。状态在 `dispatch/<执行提交>/state.json`，日志在同目录的 `dispatch.log`，可通过 `./tools/xvla/remote.ps1 robotwin-status` 查询。
+
+固定物体清单列出了 `assets/objects/objaverse/pencil/001/model.urdf`，冻结压缩包缺少该文件。Hard 专家筛选记录因该确切路径触发缺文件错误的初态，并继续筛选后续种子。`20312` 已在 `move_stapler_pad` 的种子 `200000004` 记录该排除原因。
+
+Easy 的两次真实场景对照在固定观测和噪声下得到完全一致的模型输出，动作锚点数量和成功判定也一致。`move_stapler_pad` 执行 219 个锚点并判定成功，物理步数为 11,710 与 11,687。`turn_switch` 执行 300 个锚点并达到查询上限，判定失败，物理步数为 24,370 与 24,388。该次探针在物理步门槛提前退出，未计算命令与 TCP 轨迹差。后续诊断记录这两项、逐锚点计数及作者循环独立重放的差异，保留原有验收门槛。
 
 后续开发入口已迁至 [RLinf-VLA 的 `codex/xvla`](https://github.com/MoliaiELS/RLinf-VLA/tree/codex/xvla)。独立的迁移验证作业 `20301` 在 `4090node3` 通过 Vulkan 和 X-VLA GPU 推理探针，退出码 `0:0`。
 
