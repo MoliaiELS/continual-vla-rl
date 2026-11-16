@@ -93,6 +93,7 @@ mkdir -p '$robotData/logs' '$robotData/evidence'
 printf -v command '%q ' bash "`$tool/extract_assets.sh"
 jobid=`$(sbatch --parsable --partition='$($settings.Partition)' --nodelist=4090node3 --exclude=4090node1 --ntasks=1 --cpus-per-task=2 --time=01:00:00 --job-name=rw-b0-extract --output='$robotData/logs/%j.out' --error='$robotData/logs/%j.err' --export=ALL --wrap="`$command")
 printf '%s\t%s\t%s\t%s\t%s\t%s\n' "`$jobid" extract both cpu '$robotSha' '' >> '$robotData/evidence/jobs.tsv'
+nohup bash "`$tool/extract_assets.sh" lease "`${jobid%%;*}" >> '$robotData/logs/prepare-assets-handoff.log' 2>&1 < /dev/null &
 echo ROBOTWIN_JOB_ID="`$jobid"
 "@
  }
