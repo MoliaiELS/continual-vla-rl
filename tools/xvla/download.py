@@ -65,7 +65,7 @@ def verify_file(path, entry):
             "lfs_sha256": expected_sha, "git_blob_sha1": git_blob}
 
 
-def download_file(repo, revision, entry, dest, endpoint, repo_type="model"):
+def download_file(repo, revision, entry, dest, endpoint, repo_type="model", range_bytes=None):
     import requests
 
     filename = _value(entry, "rfilename")
@@ -112,7 +112,8 @@ def download_file(repo, revision, entry, dest, endpoint, repo_type="model"):
             continue
         before = offset
         try:
-            headers = {"Accept-Encoding": "identity", "Range": f"bytes={offset}-"}
+            end = min(offset + range_bytes, size) - 1 if range_bytes else None
+            headers = {"Accept-Encoding": "identity", "Range": f"bytes={offset}-{end if end is not None else ''}"}
             # Refresh expiring signed redirects; the immutable resolve path and
             # final checksum never change. Do not print response.url.
             params = {"download": "true", "xvla_resume": str(time.time_ns())}
@@ -122,10 +123,11 @@ def download_file(repo, revision, entry, dest, endpoint, repo_type="model"):
                 if response.status_code == 206:
                     match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)",
                                          response.headers.get("Content-Range", ""))
-                    if not match or int(match[1]) != offset or int(match[3]) != size:
+                    if (not match or int(match[1]) != offset or int(match[3]) != size
+                            or (end is not None and int(match[2]) != end)):
                         raise ValueError("Mismatched HTTP resume Content-Range")
                     mode = "ab"
-                elif response.status_code == 200:
+                elif response.status_code == 200 and end is None:
                     # Range ignored: safely restart using this complete body.
                     offset, mode = 0, "wb"
                 else:
@@ -134,7 +136,7 @@ def download_file(repo, revision, entry, dest, endpoint, repo_type="model"):
                     for block in response.iter_content(1024 * 1024):
                         if not block:
                             continue
-                        if offset + len(block) > size:
+                        if offset + len(block) > (size if end is None else end + 1):
                             raise ValueError("HTTP body exceeds pinned asset size")
                         stream.write(block)
                         offset += len(block)

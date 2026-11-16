@@ -13,3 +13,7 @@ warp-lang==1.6.0
 urdf-parser-py==0.0.4
 yourdfpy==0.0.56
 networkx==3.6.1
+numpy-quaternion==2024.0.13
+pybind11==2.13.6
+scikit-image==0.25.2
+importlib-resources==6.5.2

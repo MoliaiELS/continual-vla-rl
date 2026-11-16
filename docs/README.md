@@ -1,9 +1,10 @@
 # FYP 目录索引
 
-项目状态见根目录 [PROGRESS.md](../PROGRESS.md)。截至 2026-11-16，旧实验已经归档，新方向待定。[实验归档](archive/2026-11-16-experiment-closeout.md)记录完成结果、停止位置和证据包。
+项目状态见根目录 [PROGRESS.md](../PROGRESS.md)。2026-11-16 旧实验归档后，新的工作线为 X‑VLA RoboTwin 2.0 Easy／Hard 基座能力评测。[旧实验归档](archive/2026-11-16-experiment-closeout.md)记录完成结果、停止位置和证据包。
 
 | 查找内容 | 位置 | 管理方式 |
 | --- | --- | --- |
+| RoboTwin 2.0 基座评测 | [协议与手册](robotwin/README.md)、[任务目录](robotwin/task-catalog.md)、[执行登记](robotwin/status.md) | 独立环境、数据目录及固定作业提交 |
 | 旧实验收尾结果 | [实验归档](archive/2026-11-16-experiment-closeout.md)、`docs/reports/2026-11-16-experiment-closeout/` | Git 保存归档说明，本机证据包有服务器副本 |
 | X-VLA 实验配置、冻结初态、作业 ID | [协议执行登记](xvla_protocol_20261110_execution.md)、[注册表](../configs/xvla/protocol_20261110/registry.json)、[任务划分](../configs/xvla/protocol_20261110/split.json) | Git；运行前锁定协议 |
 | X-VLA 实现、环境、命令 | [接入入口](xvla/README.md)、[运行手册](xvla_runbook.md)、[接入审计](xvla_integration_audit.md)、[调度工具](../tools/xvla/) | Git；上游参考放在 `docs/xvla/reference/`，运行时在 `third_party/rlinf/` |

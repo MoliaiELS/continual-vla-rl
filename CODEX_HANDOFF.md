@@ -2,6 +2,10 @@
 
 新对话先读 [PROGRESS.md](PROGRESS.md)，查看最新作业、已核实结果和接手点。[目录索引](docs/README.md)汇总配置、报告和服务器证据路径。下方按时间保留接入历史。
 
+## RoboTwin 2.0 B0（2026-11-16 启动）
+
+[协议与恢复命令](docs/robotwin/README.md)、[50 任务目录](docs/robotwin/task-catalog.md)、[实际运行登记](docs/robotwin/status.md)为当前入口。评测使用独立资产、Conda、Slurm 产物；不要调用下方已归档的 LIBERO 作业链。
+
 按 2026-11-10 实验协议推进的分组、留出、作业与阶段门槛见 [X-VLA 协议执行登记](docs/xvla_protocol_20261110_execution.md)。
 
 Pt 源任务训练的早期证据见 [X-VLA-Pt 源任务实验](docs/xvla_pt_source_experiment.md)。毕设主线是单源任务的初态覆盖与组合迁移，顺序后训练另设支线。19525 的源任务标准开发面板合计 25/30，已完成真实 PPO 更新、同步和重载。三种标准初态池均通过两轮试点，九个 +1 cm 变化状态均有官方策略可解性证据。顺序支线的任务 1 在 A-only PPO 前后均为 0/10，B 阶段仍待在线学习信号验收。

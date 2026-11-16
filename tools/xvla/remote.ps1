@@ -1,5 +1,5 @@
 param(
-    [Parameter(Position=0)][ValidateSet('audit','sync','bootstrap','download','submit','status','logs','session','e2-start','e2-status','e3-start','e3-status','final-submit','robotwin-prepare','robotwin-status','robotwin-logs')][string]$Command='audit',
+    [Parameter(Position=0)][ValidateSet('audit','sync','bootstrap','download','submit','status','logs','session','e2-start','e2-status','e3-start','e3-status','final-submit','robotwin-prepare','robotwin-status','robotwin-logs','robotwin-submit','robotwin-report')][string]$Command='audit',
     [Parameter(Position=1)][string]$Value='unit',
     [ValidateSet('libero','pt','robotwin')][string]$Model='libero',
     [int]$Gpus=1,
@@ -16,6 +16,10 @@ param(
     [ValidatePattern('^[0-9]+$')][string]$FailedJobId,
     [ValidatePattern('^[0-9]+$')][string]$FallbackJobId,
     [ValidateSet('256','1024')][string]$SftSteps='256',
+    [ValidatePattern('^[0-9a-f]{40}$')][string]$RobotCommit,
+    [ValidateSet('easy','hard','both')][string]$RobotLane='both',
+    [ValidatePattern('^[a-z0-9_]+$')][string]$RobotTask,
+    [ValidateRange(1,72)][int]$RobotHours=4,
     [ValidateSet('reference','expanded','stratified')][string]$ResetPool
 )
 $ErrorActionPreference='Stop'
@@ -42,7 +46,23 @@ fi
 }
 $sha=(& git -C $repoRoot rev-parse HEAD).Trim()
 $snapshot="$($settings.RunCodeRoot)/$sha"
+$robotSha=$sha
+if ($RobotCommit) { $robotSha=$RobotCommit }
+$robotSnapshot="$($settings.RunCodeRoot)/$robotSha"
 switch ($Command) {
+ 'robotwin-submit' {
+  if ($Value -notin @('build','probe','smoke','coverage','formal','extension')) { throw 'Requires build, probe, smoke, coverage, formal, or extension' }
+  Invoke-XRemote @"
+test -f '$robotSnapshot/tools/xvla/robotwin/submit.sh'
+bash '$robotSnapshot/tools/xvla/robotwin/submit.sh' '$Value' '$($settings.Partition)' '$GpuModel' '$RobotLane' '$RobotHours' '$RobotTask'
+"@
+ }
+ 'robotwin-report' {
+  if ($Value -notin @('smoke','formal')) { throw 'Requires smoke or formal' }
+  Invoke-XRemote @"
+'$($settings.CondaRoot)/envs/vla_budget_rl/bin/python' '$robotSnapshot/tools/xvla/robotwin/summarize.py' --input '$robotData/panels/$robotSha' --output '$robotData/reports/$robotSha/$Value' --phase '$Value'
+"@
+ }
  'robotwin-prepare' {
   if ($Value -notin @('env','assets','link')) { throw 'Requires env, assets, or link' }
   Invoke-XRemote @"
@@ -55,6 +75,7 @@ echo ROBOTWIN_PREPARE_PID=`$!
  'robotwin-status' {
   Invoke-XRemote @'
 squeue -u "$(id -un)" -o '%i|%j|%T|%M|%b|%R'
+if [[ -f "$FYP_ROBOTWIN_DATA/evidence/jobs.tsv" ]]; then echo '--- submitted jobs'; tail -n 10 "$FYP_ROBOTWIN_DATA/evidence/jobs.tsv"; fi
 for log in "$FYP_ROBOTWIN_DATA"/logs/{prepare-*,download-robotwin}.log; do
   if [[ -f "$log" ]]; then echo "--- ${log##*/}"; tail -n 4 "$log"; fi
 done

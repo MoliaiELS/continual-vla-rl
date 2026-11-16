@@ -25,7 +25,10 @@ def main(dest: Path, revision: str):
         entry = dict(rfilename=name, size=size, lfs=dict(size=size, sha256=checksum))
         for endpoint in ("https://hf-mirror.com", "https://huggingface.co"):
             try:
-                return {**download_file(REPO, revision, entry, dest, endpoint, "dataset"), "endpoint": endpoint}
+                # Open-ended streams from the official Xet bridge were much
+                # slower on IDAC; bounded requests preserve the same bytes.
+                return {**download_file(REPO, revision, entry, dest, endpoint, "dataset", range_bytes=2**23),
+                        "endpoint": endpoint, "range_bytes": 2**23}
             except Exception as error:
                 print(json.dumps(dict(archive=name, endpoint=endpoint, error_type=type(error).__name__)), flush=True)
         raise RuntimeError(f"Failed to verify/download {name} at {revision}")

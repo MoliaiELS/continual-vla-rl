@@ -1,0 +1,1038 @@
+{
+  "official_task_list_url": "https://robotwin-platform.github.io/doc/tasks/index.html",
+  "xvla_commit": "6c4ecfb8be458ae7c0c96094e4b0add4174f4fe2",
+  "robotwin_commit": "6e75b8b80ee32d2f495eb756cf5687e4e16f0eea",
+  "rlinf_commit": "1bf78980d9339cbc67497eddceb9a1e3a74e2acc",
+  "priority_tasks": [
+    "move_stapler_pad",
+    "turn_switch",
+    "click_alarmclock",
+    "move_pillbottle_pad",
+    "move_can_pot",
+    "open_microwave",
+    "pick_dual_bottles",
+    "lift_pot",
+    "place_bread_basket",
+    "press_stapler"
+  ],
+  "tasks": [
+    {
+      "task_id": "adjust_bottle",
+      "description_zh": "抬起并调整瓶子",
+      "objects_zh": "瓶子；对应初始姿态标签的左侧或右侧空中目标",
+      "steps_zh": "选对应一臂抓住瓶子，抬起并移向同侧目标，不张开夹爪",
+      "success_zh": "瓶子功能点 0 高度 >0.90 m，且按初态标签满足 x<−0.15 m 或 x>0.15 m；谓词未单独检查朝向。",
+      "category": "抓取搬运与放置",
+      "tags": [
+        "单臂",
+        "保持抓持",
+        "相对位置"
+      ],
+      "prompt": "adjust bottle",
+      "source_file": "envs/adjust_bottle.py",
+      "expert_line": 36,
+      "success_line": 63,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "beat_block_hammer",
+      "description_zh": "用锤子敲方块",
+      "objects_zh": "锤子、方块的指定敲击点",
+      "steps_zh": "抓锤、抬起，以锤头对准方块并接触",
+      "success_zh": "锤子功能点 0 与方块功能点 1 的 x/y 误差各 <2 cm，且两物体接触；未测冲击强度。",
+      "category": "工具或其他特殊操作",
+      "tags": [
+        "单臂",
+        "保持抓持",
+        "接触",
+        "精细对齐"
+      ],
+      "prompt": "beat block hammer",
+      "source_file": "envs/beat_block_hammer.py",
+      "expert_line": 56,
+      "success_line": 82,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "blocks_ranking_rgb",
+      "description_zh": "把红、绿、蓝方块排成一行",
+      "objects_zh": "红绿蓝三个方块；目标从左到右为红绿蓝",
+      "steps_zh": "逐个抓起并放到对应槽位，按需要切换手臂",
+      "success_zh": "相邻方块 x/y 差分别 <13/3 cm；红、绿、蓝的 x 严格递增，双夹爪张开。",
+      "category": "结构化摆放／堆叠／对齐",
+      "tags": [
+        "逐件择臂",
+        "需释放",
+        "顺序",
+        "精细对齐"
+      ],
+      "prompt": "blocks ranking rgb",
+      "source_file": "envs/blocks_ranking_rgb.py",
+      "expert_line": 106,
+      "success_line": 155,
+      "step_limit": 1200,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "blocks_ranking_size",
+      "description_zh": "按大小排列三个方块",
+      "objects_zh": "大、中、小方块；目标从左到右为大中小",
+      "steps_zh": "专家按小、中、大顺序抓放到对应槽位",
+      "success_zh": "相邻方块 x/y 差分别 <13/3 cm；大、中、小方块的 x 严格递增，双夹爪张开。",
+      "category": "结构化摆放／堆叠／对齐",
+      "tags": [
+        "逐件择臂",
+        "需释放",
+        "顺序",
+        "精细对齐"
+      ],
+      "prompt": "blocks ranking size",
+      "source_file": "envs/blocks_ranking_size.py",
+      "expert_line": 101,
+      "success_line": 149,
+      "step_limit": 1200,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "click_alarmclock",
+      "description_zh": "触碰闹钟顶部按钮",
+      "objects_zh": "闹钟；顶部接触点 0",
+      "steps_zh": "选靠近闹钟的一臂，到顶部上方闭爪，下探后撤",
+      "success_zh": "指定侧夹爪闭合，与闹钟的接触点在目标各轴 3 cm 内，首次达标后锁存。",
+      "category": "接触／按压／推动",
+      "tags": [
+        "单臂",
+        "闭爪接触",
+        "精细对齐"
+      ],
+      "prompt": "click alarmclock",
+      "source_file": "envs/click_alarmclock.py",
+      "expert_line": 42,
+      "success_line": 80,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "click_bell",
+      "description_zh": "按桌铃顶部中心",
+      "objects_zh": "桌铃；顶部接触点 0",
+      "steps_zh": "选一臂接近顶部，下探接触后撤",
+      "success_zh": "指定侧夹爪闭合；接触点 x/y 与目标差各 <2.5 cm、z 差 <3 cm，首次达标后锁存。",
+      "category": "接触／按压／推动",
+      "tags": [
+        "单臂",
+        "闭爪接触",
+        "精细对齐"
+      ],
+      "prompt": "click bell",
+      "source_file": "envs/click_bell.py",
+      "expert_line": 39,
+      "success_line": 71,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "dump_bin_bigbin",
+      "description_zh": "把小垃圾桶里的物体倒进大桶",
+      "objects_zh": "桌面小垃圾桶、大垃圾桶、5 个垃圾球",
+      "steps_zh": "左臂直接拿小桶，或先用右臂转移到中间再换左臂；抬升、重复倾倒、等待",
+      "success_zh": "小桶 z≥1 m，所有垃圾球 z 在 [0.13,0.25] m；谓词只对球检查高度。",
+      "category": "工具或其他特殊操作",
+      "tags": [
+        "左臂倾倒",
+        "可经台面换手",
+        "保持抓持",
+        "容器内容物"
+      ],
+      "prompt": "dump bin bigbin",
+      "source_file": "envs/dump_bin_bigbin.py",
+      "expert_line": 92,
+      "success_line": 153,
+      "step_limit": 600,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "grab_roller",
+      "description_zh": "双手抬起滚筒",
+      "objects_zh": "滚筒及两侧抓取点；悬空目标",
+      "steps_zh": "左右臂分别抓住滚筒两端并同步抬升",
+      "success_zh": "双夹爪均闭合，滚筒 z>0.80 m。",
+      "category": "抓取搬运与放置",
+      "tags": [
+        "双臂同步",
+        "保持抓持"
+      ],
+      "prompt": "grab roller",
+      "source_file": "envs/grab_roller.py",
+      "expert_line": 34,
+      "success_line": 55,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "handover_block",
+      "description_zh": "换手把红色长方块放上蓝垫",
+      "objects_zh": "红色长方块、对侧蓝色目标垫",
+      "steps_zh": "左臂抓起，送到中间转交给右臂；右臂对齐并放开",
+      "success_zh": "两功能点 x/y 误差各 <3 cm、z 误差 <1 cm，右夹爪张开；不检查交接历史。",
+      "category": "抓取搬运与放置",
+      "tags": [
+        "双臂直接交接",
+        "需释放",
+        "精细对齐"
+      ],
+      "prompt": "handover block",
+      "source_file": "envs/handover_block.py",
+      "expert_line": 49,
+      "success_line": 111,
+      "step_limit": 800,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "handover_mic",
+      "description_zh": "把麦克风从一只手交给另一只手",
+      "objects_zh": "麦克风；接收臂一侧的空中目标",
+      "steps_zh": "按起始侧抓取，送到交接位，另一臂接住，原夹爪放开",
+      "success_zh": "存在夹爪与麦克风接触；接收臂闭合、原臂张开；功能点 z>0.92 m 且 x 在接收臂一侧。",
+      "category": "抓取搬运与放置",
+      "tags": [
+        "双臂直接交接",
+        "持有端保持抓持"
+      ],
+      "prompt": "handover mic",
+      "source_file": "envs/handover_mic.py",
+      "expert_line": 40,
+      "success_line": 99,
+      "step_limit": 600,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "hanging_mug",
+      "description_zh": "把杯子挂上架子",
+      "objects_zh": "带把杯、杯架悬挂位置",
+      "steps_zh": "左臂将杯移到中间并释放；右臂重新抓起、对齐架钩并释放",
+      "success_zh": "杯功能点与架子原点和架功能点的中点 x/y 差均 <2 cm，杯功能点 z>0.86 m，右夹爪张开。",
+      "category": "结构化摆放／堆叠／对齐",
+      "tags": [
+        "双臂经台面换手",
+        "需释放",
+        "精细对齐"
+      ],
+      "prompt": "hanging mug",
+      "source_file": "envs/hanging_mug.py",
+      "expert_line": 41,
+      "success_line": 81,
+      "step_limit": 900,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "lift_pot",
+      "description_zh": "用双臂平抬锅",
+      "objects_zh": "带双把手的锅；悬空且上方向基本竖直",
+      "steps_zh": "两臂预合，然后抓各自把手并同步抬升",
+      "success_zh": "锅 z>0.82 m；两 TCP 距各自抓取点 <3 cm，锅上方向与世界竖直的点积 >0.8。",
+      "category": "抓取搬运与放置",
+      "tags": [
+        "双臂同步",
+        "保持抓持",
+        "姿态约束"
+      ],
+      "prompt": "lift pot",
+      "source_file": "envs/lift_pot.py",
+      "expert_line": 28,
+      "success_line": 50,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "move_can_pot",
+      "description_zh": "把罐子移到锅旁",
+      "objects_zh": "酱料罐、锅；罐子起始一侧的锅旁位置",
+      "steps_zh": "同侧臂抓罐、抬起并放在锅旁约 18 cm 处",
+      "success_zh": "罐在指定侧，0<横向差<20 cm、纵向差 <3.5 cm；罐的欧拉角 x 距 90°、y 距 0° 各 <15°，高度不超过锅原 z+1 mm，双夹爪张开。",
+      "category": "抓取搬运与放置",
+      "tags": [
+        "单臂",
+        "需释放",
+        "相对位置",
+        "姿态约束"
+      ],
+      "prompt": "move can pot",
+      "source_file": "envs/move_can_pot.py",
+      "expert_line": 72,
+      "success_line": 95,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "move_playingcard_away",
+      "description_zh": "把扑克牌移到桌边",
+      "objects_zh": "扑克牌；桌面横向边缘",
+      "steps_zh": "按所在侧抓起，沿该侧 x 方向移约 30 cm 并释放",
+      "success_zh": "牌的绝对 x>0.23 m，且双夹爪张开；谓词不要求特定一侧。",
+      "category": "抓取搬运与放置",
+      "tags": [
+        "单臂",
+        "需释放",
+        "相对位置"
+      ],
+      "prompt": "move playingcard away",
+      "source_file": "envs/move_playingcard_away.py",
+      "expert_line": 45,
+      "success_line": 62,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "move_stapler_pad",
+      "description_zh": "把订书机对齐放到垫子上",
+      "objects_zh": "订书机、彩色垫子；机身中心与垫子对齐",
+      "steps_zh": "按初态侧抓起，抬高，在垫子上调整姿态后放下",
+      "success_zh": "机身位置对垫子 x/y/z 误差 <2/2/1 cm，四元数绝对值最大与最小之差 <0.02，双夹爪张开。",
+      "category": "结构化摆放／堆叠／对齐",
+      "tags": [
+        "单臂",
+        "需释放",
+        "姿态约束",
+        "精细对齐"
+      ],
+      "prompt": "move stapler pad",
+      "source_file": "envs/move_stapler_pad.py",
+      "expert_line": 86,
+      "success_line": 113,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "open_laptop",
+      "description_zh": "掀开笔记本电脑屏幕",
+      "objects_zh": "笔记本电脑；屏幕铰链张开并靠近指定接触点",
+      "steps_zh": "按电脑朝向选臂，抓住接触点，反复跟随活动接触点掀开",
+      "success_zh": "关节位置达到全行程的 40%，指定臂 TCP 距接触点 1 <10 cm；专家尝试 50%。",
+      "category": "关节物体操作",
+      "tags": [
+        "单臂",
+        "关节阈值",
+        "末端位置"
+      ],
+      "prompt": "open laptop",
+      "source_file": "envs/open_laptop.py",
+      "expert_line": 32,
+      "success_line": 61,
+      "step_limit": 700,
+      "rlinf_wrapper_support": false,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "open_microwave",
+      "description_zh": "打开微波炉门",
+      "objects_zh": "微波炉；门铰链到达指定开度",
+      "steps_zh": "左臂接近并拉门；不足时改变抓点继续开启",
+      "success_zh": "门关节位置 ≥关节上限值的 60%；专家以 70% 为目标。",
+      "category": "关节物体操作",
+      "tags": [
+        "左臂",
+        "关节阈值",
+        "可重抓"
+      ],
+      "prompt": "open microwave",
+      "source_file": "envs/open_microwave.py",
+      "expert_line": 31,
+      "success_line": 102,
+      "step_limit": 1500,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "pick_diverse_bottles",
+      "description_zh": "双手分别举起随机型号瓶子",
+      "objects_zh": "左右两只随机型号的瓶子；各自在空中就位",
+      "steps_zh": "两臂同步抓瓶、抬升、移到左右目标，保持夹持",
+      "success_zh": "两瓶功能点相对各自 x/y 目标误差均 <10 cm，z 都 >0.89 m；不要求释放。",
+      "category": "抓取搬运与放置",
+      "tags": [
+        "双臂同步",
+        "保持抓持",
+        "相对位置"
+      ],
+      "prompt": "pick diverse bottles",
+      "source_file": "envs/pick_diverse_bottles.py",
+      "expert_line": 49,
+      "success_line": 94,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "pick_dual_bottles",
+      "description_zh": "双手分别举起两只固定型号瓶子",
+      "objects_zh": "左侧 001_bottle/base13、右侧 001_bottle/base16；各自在空中就位",
+      "steps_zh": "两臂同步抓瓶、抬升、移到左右目标，保持夹持",
+      "success_zh": "两瓶功能点相对各自 x/y 目标误差均 <10 cm，z 都 >0.89 m；不要求释放。",
+      "category": "抓取搬运与放置",
+      "tags": [
+        "双臂同步",
+        "保持抓持",
+        "相对位置"
+      ],
+      "prompt": "pick dual bottles",
+      "source_file": "envs/pick_dual_bottles.py",
+      "expert_line": 50,
+      "success_line": 92,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "place_a2b_left",
+      "description_zh": "把物体 A 放到参照物 B 左侧",
+      "objects_zh": "随机日用品 A/B；A 应放在 B 左边",
+      "steps_zh": "识别两件物体，抓起 A，放到 B 左侧约 13 cm 处",
+      "success_zh": "两物平面距离 >8 cm 且 <20 cm，A 的 x 小于 B，y 差 <5 cm，双夹爪张开。",
+      "category": "抓取搬运与放置",
+      "tags": [
+        "单臂",
+        "需释放",
+        "相对位置"
+      ],
+      "prompt": "place a2b left",
+      "source_file": "envs/place_a2b_left.py",
+      "expert_line": 123,
+      "success_line": 147,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "place_a2b_right",
+      "description_zh": "把物体 A 放到参照物 B 右侧",
+      "objects_zh": "随机日用品 A/B；A 应放在 B 右边",
+      "steps_zh": "识别两件物体，抓起 A，放到 B 右侧约 13 cm 处",
+      "success_zh": "两物平面距离 >8 cm 且 <20 cm，A 的 x 大于 B，y 差 <5 cm，双夹爪张开。",
+      "category": "抓取搬运与放置",
+      "tags": [
+        "单臂",
+        "需释放",
+        "相对位置"
+      ],
+      "prompt": "place a2b right",
+      "source_file": "envs/place_a2b_right.py",
+      "expert_line": 124,
+      "success_line": 148,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "place_bread_basket",
+      "description_zh": "把面包装入篮子",
+      "objects_zh": "一或两块面包、面包篮",
+      "steps_zh": "同侧逐件抓放；若两块分占两侧，可双臂抓起后依次放",
+      "success_zh": "所有面包的 x/y 到篮中心各 <5 cm，z>0.73 m 加桌面偏移，双夹爪张开。",
+      "category": "抓取搬运与放置",
+      "tags": [
+        "单臂或双臂",
+        "需释放",
+        "多物体"
+      ],
+      "prompt": "place bread basket",
+      "source_file": "envs/place_bread_basket.py",
+      "expert_line": 92,
+      "success_line": 190,
+      "step_limit": 700,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "place_bread_skillet",
+      "description_zh": "把面包放进手持平底锅",
+      "objects_zh": "面包、平底锅；锅和面包均悬离桌面",
+      "steps_zh": "一臂持锅、一臂持面包；先调整锅姿态，另一臂放入面包",
+      "success_zh": "面包中心与锅功能点 x/y 差各 <3.5 cm，两点 z 都 >0.76 m 加桌面偏移；未单独检查释放。",
+      "category": "抓取搬运与放置",
+      "tags": [
+        "双臂同步",
+        "一手保持抓持",
+        "精细对齐"
+      ],
+      "prompt": "place bread skillet",
+      "source_file": "envs/place_bread_skillet.py",
+      "expert_line": 61,
+      "success_line": 114,
+      "step_limit": 500,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "place_burger_fries",
+      "description_zh": "把汉堡和薯条分别摆到托盘两侧",
+      "objects_zh": "汉堡、薯条、带左右功能点的托盘",
+      "steps_zh": "两臂各抓一件并抬起；先放汉堡，再放薯条",
+      "success_zh": "两件各自到对应槽位的平面距离 <8 cm，双夹爪张开。",
+      "category": "结构化摆放／堆叠／对齐",
+      "tags": [
+        "双臂同步",
+        "需释放",
+        "多物体",
+        "相对位置"
+      ],
+      "prompt": "place burger fries",
+      "source_file": "envs/place_burger_fries.py",
+      "expert_line": 72,
+      "success_line": 125,
+      "step_limit": 500,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "place_can_basket",
+      "description_zh": "把罐放进篮子并举起篮子",
+      "objects_zh": "罐、提篮；装入后携篮抬离桌面",
+      "steps_zh": "一臂入篮并释放，另一臂抓起提篮",
+      "success_zh": "篮和罐分别比初态升高 >2 cm，篮轴与竖直点积 >0.5，中心 L1 距离 <15 cm，罐接触篮而不接触桌。",
+      "category": "抓取搬运与放置",
+      "tags": [
+        "双臂分工",
+        "篮子保持抓持",
+        "接触"
+      ],
+      "prompt": "place can basket",
+      "source_file": "envs/place_can_basket.py",
+      "expert_line": 69,
+      "success_line": 141,
+      "step_limit": 700,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "place_cans_plasticbox",
+      "description_zh": "把两罐放进塑料箱的槽位",
+      "objects_zh": "两个罐、带两个位置的塑料箱",
+      "steps_zh": "左右臂同时抓起两罐，再依次入箱",
+      "success_zh": "每个罐到最近槽位的平面距离 <4 cm，双夹爪张开；谓词未要求一罐一槽。",
+      "category": "结构化摆放／堆叠／对齐",
+      "tags": [
+        "双臂同步",
+        "需释放",
+        "多物体",
+        "精细对齐"
+      ],
+      "prompt": "place cans plasticbox",
+      "source_file": "envs/place_cans_plasticbox.py",
+      "expert_line": 76,
+      "success_line": 127,
+      "step_limit": 800,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "place_container_plate",
+      "description_zh": "把杯或碗放到盘上",
+      "objects_zh": "杯或碗、盘子中心",
+      "steps_zh": "抓取容器，抬起并放到盘子功能点",
+      "success_zh": "容器与盘中心 x/y/z 差 <5/5/3 cm，双夹爪张开。",
+      "category": "抓取搬运与放置",
+      "tags": [
+        "单臂",
+        "需释放",
+        "精细对齐"
+      ],
+      "prompt": "place container plate",
+      "source_file": "envs/place_container_plate.py",
+      "expert_line": 55,
+      "success_line": 93,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "place_dual_shoes",
+      "description_zh": "把两只鞋按同一方向放进鞋盒",
+      "objects_zh": "左右两只鞋、带两槽的鞋盒",
+      "steps_zh": "两臂分别抓住并抬起，两只鞋依次对齐槽位后释放",
+      "success_zh": "每只鞋 x/y 对各自槽位差 <5 cm；符号归一后四元数各分量对目标差 <0.07；z 距盒 z+1 cm <3 cm，双夹爪张开。",
+      "category": "结构化摆放／堆叠／对齐",
+      "tags": [
+        "双臂同步",
+        "需释放",
+        "姿态约束",
+        "精细对齐"
+      ],
+      "prompt": "place dual shoes",
+      "source_file": "envs/place_dual_shoes.py",
+      "expert_line": 90,
+      "success_line": 141,
+      "step_limit": 600,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "place_empty_cup",
+      "description_zh": "把空杯放上杯垫",
+      "objects_zh": "空杯、杯垫对应功能点",
+      "steps_zh": "选一臂，半闭后抓杯，抬起并放到杯垫上",
+      "success_zh": "两功能点的平面距离 <3.5 cm、z 差 <1.5 cm，双夹爪张开。",
+      "category": "抓取搬运与放置",
+      "tags": [
+        "单臂",
+        "需释放",
+        "精细对齐"
+      ],
+      "prompt": "place empty cup",
+      "source_file": "envs/place_empty_cup.py",
+      "expert_line": 55,
+      "success_line": 90,
+      "step_limit": 500,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "place_fan",
+      "description_zh": "把风扇对齐放到垫子上",
+      "objects_zh": "风扇、彩色目标垫",
+      "steps_zh": "按初态选臂，抓住风扇并抬升，调整姿态放下",
+      "success_zh": "位置各轴对目标差 <4 cm；符号归一后四元数各分量对 [0.707,0.707,0,0] 差 <0.05，双夹爪张开。",
+      "category": "结构化摆放／堆叠／对齐",
+      "tags": [
+        "单臂",
+        "需释放",
+        "姿态约束",
+        "精细对齐"
+      ],
+      "prompt": "place fan",
+      "source_file": "envs/place_fan.py",
+      "expert_line": 89,
+      "success_line": 116,
+      "step_limit": 400,
+      "rlinf_wrapper_support": false,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "place_mouse_pad",
+      "description_zh": "把鼠标按指定姿态放到垫子上",
+      "objects_zh": "鼠标、彩色目标垫",
+      "steps_zh": "抓起鼠标，对齐并放到垫子上",
+      "success_zh": "鼠标距垫子中心 x<1.5 cm、y<1.2 cm；四元数取绝对值后，第 2×3 或 0×1 分量乘积距 0.49 <0.015，双夹爪张开。",
+      "category": "结构化摆放／堆叠／对齐",
+      "tags": [
+        "单臂",
+        "需释放",
+        "姿态约束",
+        "精细对齐"
+      ],
+      "prompt": "place mouse pad",
+      "source_file": "envs/place_mouse_pad.py",
+      "expert_line": 89,
+      "success_line": 118,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "place_object_basket",
+      "description_zh": "把随机物体放进篮子并举起篮子",
+      "objects_zh": "扑克牌或玩具车、提篮；携篮抬离桌面",
+      "steps_zh": "同侧臂抓放物体，另一臂抓篮并抬起",
+      "success_zh": "物体和篮分别较初态升高 >2 cm，篮轴与竖直点积 >0.5，中心 L1 距离 <15 cm，物体接触篮而不接触桌。",
+      "category": "抓取搬运与放置",
+      "tags": [
+        "双臂分工",
+        "篮子保持抓持",
+        "接触"
+      ],
+      "prompt": "place object basket",
+      "source_file": "envs/place_object_basket.py",
+      "expert_line": 71,
+      "success_line": 141,
+      "step_limit": 700,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "place_object_scale",
+      "description_zh": "把随机物体放上电子秤",
+      "objects_zh": "鼠标、订书机或桌铃；电子秤功能点",
+      "steps_zh": "同侧臂抓取抬升，放到秤面",
+      "success_zh": "物体与秤功能点平面距离 <3.5 cm，物体 z>秤功能点 z−1 cm，执行臂夹爪张开；不测称重读数。",
+      "category": "抓取搬运与放置",
+      "tags": [
+        "单臂",
+        "需释放",
+        "精细对齐"
+      ],
+      "prompt": "place object scale",
+      "source_file": "envs/place_object_scale.py",
+      "expert_line": 100,
+      "success_line": 130,
+      "step_limit": 400,
+      "rlinf_wrapper_support": false,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "place_object_stand",
+      "description_zh": "把随机物体放上展示台",
+      "objects_zh": "随机日用品、展示台中心",
+      "steps_zh": "抓起物体，抬升并放到展示台功能点",
+      "success_zh": "物体与展示台中心 x/y 差各 <3 cm，双夹爪张开；谓词未检查 z。",
+      "category": "抓取搬运与放置",
+      "tags": [
+        "单臂",
+        "需释放",
+        "精细对齐"
+      ],
+      "prompt": "place object stand",
+      "source_file": "envs/place_object_stand.py",
+      "expert_line": 104,
+      "success_line": 134,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "place_phone_stand",
+      "description_zh": "把手机对齐放进支架",
+      "objects_zh": "手机、手机支架对应功能点",
+      "steps_zh": "同侧臂抓手机，调整后对齐支架并释放",
+      "success_zh": "两功能点 x/y/z 误差 <4.5/4/4 cm，双夹爪张开；未另设角度阈值。",
+      "category": "结构化摆放／堆叠／对齐",
+      "tags": [
+        "单臂",
+        "需释放",
+        "精细对齐"
+      ],
+      "prompt": "place phone stand",
+      "source_file": "envs/place_phone_stand.py",
+      "expert_line": 71,
+      "success_line": 99,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "place_shoe",
+      "description_zh": "把单只鞋按指定方向放到垫上",
+      "objects_zh": "鞋、桌面目标垫",
+      "steps_zh": "抓起鞋，将鞋底和目标对齐后释放",
+      "success_zh": "鞋中心对指定 x/y 误差 <5/2 cm，符号归一后四元数各分量对目标差 <0.07，双夹爪张开。",
+      "category": "结构化摆放／堆叠／对齐",
+      "tags": [
+        "单臂",
+        "需释放",
+        "姿态约束",
+        "精细对齐"
+      ],
+      "prompt": "place shoe",
+      "source_file": "envs/place_shoe.py",
+      "expert_line": 62,
+      "success_line": 90,
+      "step_limit": 500,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "press_stapler",
+      "description_zh": "触碰订书机顶部的指定点",
+      "objects_zh": "固定的订书机；接触点 2",
+      "steps_zh": "选一臂到订书机上方，闭爪后下探",
+      "success_zh": "夹爪与订书机的接触位置在接触点 2 各轴 3 cm 内并锁存；谓词不要求实际压下机构或订纸。",
+      "category": "接触／按压／推动",
+      "tags": [
+        "单臂",
+        "闭爪接触",
+        "精细对齐"
+      ],
+      "prompt": "press stapler",
+      "source_file": "envs/press_stapler.py",
+      "expert_line": 30,
+      "success_line": 45,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "put_bottles_dustbin",
+      "description_zh": "把三只瓶子投入垃圾桶",
+      "objects_zh": "三个瓶子、左侧垃圾桶",
+      "steps_zh": "左侧瓶子左臂直接投；右侧瓶子先由右臂抓起再交给左臂投",
+      "success_zh": "三瓶 x/y 均在桶的矩形容差内，且各瓶 0.20<z<0.70 m。",
+      "category": "抓取搬运与放置",
+      "tags": [
+        "逐件择臂",
+        "条件直接交接",
+        "需释放",
+        "多物体"
+      ],
+      "prompt": "put bottles dustbin",
+      "source_file": "envs/put_bottles_dustbin.py",
+      "expert_line": 73,
+      "success_line": 145,
+      "step_limit": 1700,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "put_object_cabinet",
+      "description_zh": "拉开柜子的抽屉并放入随机物体",
+      "objects_zh": "柜子抽屉、随机桌面物体；物体置于抽屉内",
+      "steps_zh": "一臂抓物，另一臂拉抽屉，前者抬升并放入",
+      "success_zh": "物体 x/y 与柜功能点差各 <5 cm，较初态升高 >0.7 cm 且 <12 cm，持物臂张开；没有单列抽屉角度阈值。",
+      "category": "关节物体操作",
+      "tags": [
+        "双臂分工",
+        "需释放",
+        "开抽屉后放置"
+      ],
+      "prompt": "put object cabinet",
+      "source_file": "envs/put_object_cabinet.py",
+      "expert_line": 84,
+      "success_line": 118,
+      "step_limit": 700,
+      "rlinf_wrapper_support": false,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "rotate_qrcode",
+      "description_zh": "旋转二维码牌后放回桌面",
+      "objects_zh": "二维码收款牌；指定四元数姿态",
+      "steps_zh": "抓起标牌，改变方向，再对齐释放",
+      "success_zh": "符号归一后的四元数各分量对 [0.707,0.707,0,0] 差 <0.05；牌 z<0.75 m 加桌面偏移，双夹爪张开。",
+      "category": "结构化摆放／堆叠／对齐",
+      "tags": [
+        "单臂",
+        "需释放",
+        "姿态约束"
+      ],
+      "prompt": "rotate qrcode",
+      "source_file": "envs/rotate_qrcode.py",
+      "expert_line": 43,
+      "success_line": 70,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "scan_object",
+      "description_zh": "用手持扫描器对准物体",
+      "objects_zh": "扫描器、茶盒；扫描轴对准目标",
+      "steps_zh": "两臂分别抓起并举高，调整茶盒位置，保持夹持并对准扫描器",
+      "success_zh": "沿扫描方向有符号投影距离在 (0,7) cm，三轴对准误差 <2.5 cm，双夹爪闭合；未测实际解码。",
+      "category": "工具或其他特殊操作",
+      "tags": [
+        "双臂同步",
+        "保持抓持",
+        "姿态约束",
+        "精细对齐"
+      ],
+      "prompt": "scan object",
+      "source_file": "envs/scan_object.py",
+      "expert_line": 57,
+      "success_line": 103,
+      "step_limit": 500,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "shake_bottle_horizontally",
+      "description_zh": "将瓶子横置并摇晃",
+      "objects_zh": "瓶子；专家先转为水平再反复摆动",
+      "steps_zh": "抓瓶抬起，旋至水平后交替摆动，再回到横向姿态",
+      "success_zh": "只要求瓶 z>0.80 m 加桌面偏移；不判定是否摇晃或保持横向。",
+      "category": "工具或其他特殊操作",
+      "tags": [
+        "单臂",
+        "保持抓持",
+        "旋转",
+        "动作历史未判定"
+      ],
+      "prompt": "shake bottle horizontally",
+      "source_file": "envs/shake_bottle_horizontally.py",
+      "expert_line": 42,
+      "success_line": 92,
+      "step_limit": 700,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "shake_bottle",
+      "description_zh": "举起并反复摇晃瓶子",
+      "objects_zh": "瓶子；专家交替旋转并上下摆动",
+      "steps_zh": "抓瓶并抬升，做三轮往复摆动，回到初始抬起姿态",
+      "success_zh": "只要求瓶 z>0.80 m 加桌面偏移；不判定摇晃幅度、次数或方向。",
+      "category": "工具或其他特殊操作",
+      "tags": [
+        "单臂",
+        "保持抓持",
+        "旋转",
+        "动作历史未判定"
+      ],
+      "prompt": "shake bottle",
+      "source_file": "envs/shake_bottle.py",
+      "expert_line": 42,
+      "success_line": 82,
+      "step_limit": 700,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "stack_blocks_three",
+      "description_zh": "按红绿蓝从下到上叠三块积木",
+      "objects_zh": "红、绿、蓝方块；单列三层",
+      "steps_zh": "逐个抓放，先摆底座，再堆中层和顶层",
+      "success_zh": "相邻层 x/y 差各 <2.5 cm，层高差距 5 cm <1.2 cm，须红在最下、绿居中、蓝在顶，双夹爪张开。",
+      "category": "结构化摆放／堆叠／对齐",
+      "tags": [
+        "逐件择臂",
+        "需释放",
+        "堆叠",
+        "精细对齐"
+      ],
+      "prompt": "stack blocks three",
+      "source_file": "envs/stack_blocks_three.py",
+      "expert_line": 64,
+      "success_line": 122,
+      "step_limit": 1200,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "stack_blocks_two",
+      "description_zh": "把绿色方块叠在红色方块上",
+      "objects_zh": "红、绿方块；单列两层",
+      "steps_zh": "摆好红色底块，再放上绿色方块",
+      "success_zh": "x/y 差各 <2.5 cm，绿块比红块高约 5 cm 且误差 <1.2 cm，双夹爪张开。",
+      "category": "结构化摆放／堆叠／对齐",
+      "tags": [
+        "逐件择臂",
+        "需释放",
+        "堆叠",
+        "精细对齐"
+      ],
+      "prompt": "stack blocks two",
+      "source_file": "envs/stack_blocks_two.py",
+      "expert_line": 62,
+      "success_line": 116,
+      "step_limit": 800,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "stack_bowls_three",
+      "description_zh": "将三个碗套叠成一摞",
+      "objects_zh": "三个碗；一列套叠",
+      "steps_zh": "摆底碗，再依次对齐放上另外两碗",
+      "success_zh": "按实际高度排序，相邻碗 x/y 差各 <4 cm；三个 z 各减 [0.74,0.77,0.81] m 加桌面偏移后均 <2 cm（单边上界）；双夹爪张开。",
+      "category": "结构化摆放／堆叠／对齐",
+      "tags": [
+        "逐件择臂",
+        "需释放",
+        "套叠",
+        "精细对齐"
+      ],
+      "prompt": "stack bowls three",
+      "source_file": "envs/stack_bowls_three.py",
+      "expert_line": 94,
+      "success_line": 108,
+      "step_limit": 1200,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "stack_bowls_two",
+      "description_zh": "将两个碗套叠成一摞",
+      "objects_zh": "两个碗；一列套叠",
+      "steps_zh": "摆底碗，再对齐放上另一碗",
+      "success_zh": "按实际高度排序，x/y 差各 <4 cm；两个 z 各减 [0.74,0.77] m 加桌面偏移后均 <2 cm（单边上界）；双夹爪张开。",
+      "category": "结构化摆放／堆叠／对齐",
+      "tags": [
+        "逐件择臂",
+        "需释放",
+        "套叠",
+        "精细对齐"
+      ],
+      "prompt": "stack bowls two",
+      "source_file": "envs/stack_bowls_two.py",
+      "expert_line": 92,
+      "success_line": 110,
+      "step_limit": 900,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "stamp_seal",
+      "description_zh": "把印章对准目标点放下",
+      "objects_zh": "印章、彩色目标垫；印章平面中心对齐",
+      "steps_zh": "抓住印章，抬起，搬到目标垫并放下",
+      "success_zh": "印章和目标 x/y 差各 <1 cm，双夹爪张开；未检查是否留下印迹。",
+      "category": "工具或其他特殊操作",
+      "tags": [
+        "单臂",
+        "需释放",
+        "精细对齐"
+      ],
+      "prompt": "stamp seal",
+      "source_file": "envs/stamp_seal.py",
+      "expert_line": 103,
+      "success_line": 131,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "turn_switch",
+      "description_zh": "拨动开关使其达到启用位置",
+      "objects_zh": "开关；单关节接近上限",
+      "steps_zh": "据开关朝向选臂，先闭爪，再沿抓取点拨动执行器",
+      "success_zh": "开关第一个关节位置 ≥关节上限−0.05（关节原单位）。",
+      "category": "关节物体操作",
+      "tags": [
+        "单臂",
+        "闭爪接触",
+        "关节阈值"
+      ],
+      "prompt": "turn switch",
+      "source_file": "envs/turn_switch.py",
+      "expert_line": 27,
+      "success_line": 40,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    },
+    {
+      "task_id": "move_pillbottle_pad",
+      "description_zh": "把药瓶放在垫子上",
+      "objects_zh": "药瓶、垫子对应功能点",
+      "steps_zh": "同侧臂抓药瓶，抬升并对准垫子后释放",
+      "success_zh": "药瓶对垫子 x/y 差各 <3 cm，药瓶 z 距 0.741 m 加桌面偏移 <5 mm，双夹爪张开。",
+      "category": "抓取搬运与放置",
+      "tags": [
+        "单臂",
+        "需释放",
+        "精细对齐"
+      ],
+      "prompt": "move pillbottle pad",
+      "source_file": "envs/move_pillbottle_pad.py",
+      "expert_line": 68,
+      "success_line": 97,
+      "step_limit": 400,
+      "rlinf_wrapper_support": true,
+      "native_status": "source_audited"
+    }
+  ]
+}
