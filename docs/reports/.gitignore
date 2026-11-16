@@ -1,0 +1,4 @@
+# Keep local report snapshots, archives and media out of the code repository.
+*
+!.gitignore
+!README.md

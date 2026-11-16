@@ -105,8 +105,10 @@
     {"run_id": "E3-dispatch", "phase": "E3", "status": "COMPLETE_VALID", "depends_on": ["E2-paired-source-dev"], "failed_attempt_job_ids": [19730], "launch_method": "login_node_e3_start", "project_commit": "4db7b0127f43c75f7763eb642fef4005330e44f5", "evidence": ["protocol_20261110/e3_dispatch.json"]},
     {"run_id": "E3-SFT-cont", "phase": "E3", "status": "COMPLETE_VALID", "depends_on": ["E3-dispatch"], "job_ids": [19735, 19736, 19740], "failed_attempt_job_ids": [19732], "training_seeds": [101, 202, 303], "milestone_optimizer_steps": [512, 1024, 2048], "development_successes_by_seed_and_milestone": [[28, 29, 27], [29, 27, 28], [29, 27, 29]], "episodes_per_milestone": 30, "terminal_paired_gains_losses_vs_B0": [[3, 1], [3, 0], [4, 0]], "gpu_hours_by_seed": [0.6359, 0.6272, 0.6398]},
     {
-      "run_id": "E3-formal-PPO", "phase": "E3", "status": "RUNNING", "depends_on": ["E2-paired-source-dev"],
-      "job_ids": [19746, 19788, 19834, 19894],
+      "run_id": "E3-formal-PPO", "phase": "E3", "status": "BLOCKED", "depends_on": ["E2-paired-source-dev"],
+      "observed_at": "2026-11-16T19:47:54+08:00",
+      "dispatch_commit": "7ddb110d183d54a2436a9b95e4919bd624befb01", "dispatch_state": "RUNNING",
+      "job_ids": [19746, 19788, 19834, 19894, 19990, 20063, 20137], "failed_attempt_job_ids": [20137],
       "completed_seed_101": {
         "B1": {"actual_control_steps": [50055, 100129, 200234], "development_successes": [26, 23, 22], "optimizer_updates": 544, "gpu_model": "4090", "gpu_hours": 12.0128},
         "B2": {"actual_control_steps": [50237, 100177, 200188], "development_successes": [25, 25, 25], "optimizer_updates": 677, "gpu_model": "4090", "gpu_hours": 14.7530},
@@ -119,13 +121,21 @@
           "gpu_model": "3090", "gpu_hours": 16.0346, "device_peak_mib": 12945, "job_compute_peak_mib": 10744
         }
       },
-      "running_snapshot": {
-        "condition": "B1", "seed": 202, "job_id": 19894, "slurm_state": "RUNNING", "gpu_model": "3090", "node": "3090node2",
-        "observed_at": "2026-11-13T15:00:45+08:00", "actual_control_steps": 32803, "optimizer_updates": 113,
-        "training_successes": 451, "training_episodes": 452, "settling_steps": 4520
+      "completed_seed_202": {
+        "B1": {"job_id": 19894, "actual_control_steps": [50245, 100271, 200499], "development_successes": [25, 26, 26], "optimizer_updates": 678, "gpu_model": "3090", "node": "3090node2", "gpu_hours": 16.2153},
+        "B2": {"job_id": 19990, "actual_control_steps": [50130, 100182, 200138], "development_successes": [25, 24, 22], "optimizer_updates": 648, "gpu_model": "4090", "node": "4090node3", "gpu_hours": 13.7927},
+        "M": {"job_id": 20063, "actual_control_steps": [50227, 100060, 200249], "development_successes": [25, 24, 27], "optimizer_updates": 682, "gpu_model": "3090", "node": "3090node2", "gpu_hours": 15.4854}
+      },
+      "seed_303_blocker": {
+        "condition": "B1", "seed": 303, "job_id": 20137, "dispatch_row_state": "SUBMITTED", "slurm_state": "FAILED",
+        "slurm_exit_code": "1:0", "slurm_elapsed": "00:05:08", "gpu_model": "4090", "node": "4090node3", "gpu_hours": 0.0851,
+        "error": "Initial actor logprob does not reproduce behavior policy", "max_abs_logprob_difference": 0.001117706298828125,
+        "logprob_tolerance": 0.001, "max_abs_chunk_logprob_difference": 0.002292633056640625,
+        "first_rollout_policy_env_steps": 287, "first_rollout_settling_steps": 40, "optimizer_updates": 0,
+        "budget_file_present": false, "checkpoint_present": false, "ready_conditions": ["B2", "M"]
       },
       "gpu_fallback": {"condition": "M", "seed": 101, "previous_job_id": 19810, "previous_gpu_model": "4090", "job_id": 19834, "gpu_model": "3090", "node": "3090node2", "walltime_hours": 36, "project_commit": "7ddb110d183d54a2436a9b95e4919bd624befb01"},
-      "evidence": ["protocol_20261110/e3_dispatch.json", "runs/19746/control_step_budget.json", "runs/19788/control_step_budget.json", "runs/submission-19834.json", "runs/19834/control_step_budget.json", "runs/submission-19894.json"]
+      "evidence": ["protocol_20261110/e3_dispatch.json", "runs/19746/control_step_budget.json", "runs/19788/control_step_budget.json", "runs/submission-19834.json", "runs/19834/control_step_budget.json", "runs/19894/control_step_budget.json", "runs/19990/control_step_budget.json", "runs/20063/control_step_budget.json", "logs/20137.out", "logs/20137.err", "runs/20137/resources.json"]
     },
     {"run_id": "E3-final-source-A", "phase": "E3", "status": "SEALED", "depends_on": ["E3-SFT-cont", "E3-formal-PPO"], "job_ids": [], "task_id": 0, "trial_ids_inclusive": [40, 49], "distinct_initial_states": 10, "repetitions_per_state": 5, "episodes_per_policy": 50, "geometry_audit_job_id": 19572},
     {"run_id": "E3-final-H", "phase": "E3", "status": "SEALED", "depends_on": ["E3-SFT-cont", "E3-formal-PPO"], "job_ids": []},

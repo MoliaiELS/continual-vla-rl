@@ -1,6 +1,6 @@
 # 持续强化后训练启动记录
 
-当前 X-VLA 工作见 [X-VLA 部署与实验进度](#x-vla-部署与实验进度)。下文保留 11 月 4 日 OpenVLA-OFT 基线的启动记录。
+当前作业与结果见根目录 [PROGRESS.md](../PROGRESS.md)。本页保留 11 月 4 日的 OpenVLA-OFT 基线启动记录，以及 11 月 10 日的 [X-VLA 早期接入快照](#x-vla-部署与实验进度)。
 
 代码运行版本为 `5b08e8c4c16264eb8943451599a54356e0a3e761`，已推送到 `fyp/deploy-base`。完整运行参数见 [执行协议](experiment-execution.md) 与 [十任务协议](long-sequence-execution.md)。服务器端 43 项测试全部通过，包含真实 Torch reentrant checkpoint 的梯度累积和随机状态一致性测试；绘图数据检查及实际 Matplotlib 渲染通过。
 
@@ -52,7 +52,7 @@
 
 ## X-VLA 部署与实验进度
 
-更新于北京时间 2026-11-10 08:56。此时 Slurm 中没有本项目正在运行或排队的作业。**X-VLA 已部署，PPO 和 GRPO 已各完成一次真实在线更新验收。Pt 少示教路径已接到在线采样，当前卡在成功奖励。**
+本节为北京时间 2026-11-10 08:56 的历史快照。此时 Slurm 中没有本项目正在运行或排队的作业。**当时 X-VLA 已部署，PPO 和 GRPO 已各完成一次真实在线更新验收。Pt 五示教路径已接到在线采样，但未取得成功奖励。** 后续十示教训练与正式 PPO 见 [PROGRESS.md](../PROGRESS.md)。
 
 ### 主要目标
 
@@ -93,7 +93,7 @@
 
 PPO 和 GRPO 的有效更新证据来自官方 Libero 权重小测。Pt 少示教权重的实测证据覆盖 SFT、重载、同步和真实采样，后续仍需取得有效奖励并完成更新。多卡、长期训练、`full`／LoRA 实训和 OOD 研究结果仍待验收。
 
-### 新 agent 接手
+### 当时的接手建议
 
 1. 先读 [AGENTS.md](../AGENTS.md) 和 [CODEX_HANDOFF.md](../CODEX_HANDOFF.md)，再查 [接入审计](xvla_integration_audit.md)、[操作手册](xvla_runbook.md) 和 [RL 采样器](xvla_rl_sampler.md)。
 2. 优先用一条已知成功示教验证转换后的绝对动作能否复现成功。随后测固定观测和噪声下的位置、旋转和夹爪误差，区分目标转换问题、拟合不足和闭环漂移。现有转换验收验证了相对动作回放以及绝对目标记录。

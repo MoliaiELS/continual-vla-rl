@@ -3,6 +3,7 @@
 </h1>
 
 FYP IADC deployment workflow: [docs/deployment.md](docs/deployment.md).
+Current FYP experiments: [PROGRESS.md](PROGRESS.md) · [repository and results index](docs/README.md).
 
 <p align="center">
   <a href="https://arxiv.org/abs/2603.11653"><img src="https://img.shields.io/badge/arXiv-Paper-red" alt="arXiv"></a>

@@ -1,6 +1,6 @@
 # X-VLA 接入
 
-更新：2026-11-08。分支：`codex/xvla-integration`。
+接入记录起于 2026-11-08。分支：`codex/xvla-integration`。当前实验与作业见 [PROGRESS.md](../../PROGRESS.md)，文件和产物见[目录索引](../README.md)。
 
 本分支已实现独立的 `xvla_rlinf` adapter、固定版本 vendor、SFT/PPO/GRPO 入口及原生计算对照。根目录保留 Simple Recipe；X-VLA 使用 `third_party/rlinf` 的固定运行时。实际验收状态和日志见 [接入审计](../xvla_integration_audit.md)，命令见 [运行手册](../xvla_runbook.md)，概率口径见 [sampler 定义](../xvla_rl_sampler.md)。本页其余接口梳理是接入前的参考记录，不代表实际实验已通过。
 
@@ -37,4 +37,4 @@ git cat-file -e '1bf78980d9339cbc67497eddceb9a1e3a74e2acc^{commit}'
 
 X-VLA 的入口是 `tools/xvla/remote.ps1`，读取同一份项目服务器 settings，并使用独立 `xvla_rlinf` 环境和数据子目录。原 OpenVLA 的模型目录、Conda 和实验命令仍不是 X-VLA 的部署方案。
 
-本次仅开展接入及小规模验证。大规模 RL、经验回放及持续学习实验在相应验收之后开展。
+本页记录接入及小规模验证的范围。后续正式实验按[协议执行登记](../xvla_protocol_20261110_execution.md)推进。
