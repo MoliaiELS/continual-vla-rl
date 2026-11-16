@@ -40,6 +40,6 @@
 | 本机收尾包 | `docs/reports/2026-11-16-experiment-closeout/`。`closeout-evidence.zip` 含原始派发表、Slurm 记账、E2/E3 预算与开发评估摘要、`20137` 日志、OpenVLA 计划和现有分析。`closeout.json` 附 ZIP 的大小和 SHA256。`protocol.md` 的 SHA256 与冻结登记一致。 |
 | 历史图表和视频 | `docs/reports/2026-11-04/`、`docs/reports/2026-11-11-xvla/`，保留 HTML、相关资产和各自 ZIP。[离线报告索引](../reports/README.md) |
 | 服务器归档 | `<DataRoot>/xvla/protocol_20261110/archive/2026-11-16/`，含 `closeout-evidence.zip` 和 `closeout.json`。 |
-| 服务器原始产物 | `<DataRoot>/xvla/{runs,logs,datasets,models,evidence}/` 和 `<DataRoot>/experiments/20261104-*/`。完整训练日志、逐回合文件、视频和权重可按作业号查找。 |
+| 服务器原始产物 | 旧 X-VLA 的训练日志、逐回合文件、视频和权重位于 `<DataRoot>/xvla/{runs,logs,datasets,models,evidence}/`。旧 OpenVLA 的服务器原始产物在收尾后按用户要求清理，范围见[清理记录](../robotwin/status.md)。 |
 
 本机收尾包的 ZIP SHA256 为 `de4626b92fd9553c3ab98a8ae1cc2c7546d23187d5ec52f86422fe1cd2c985e6`。[目录索引](../README.md) · [当前进度](../../PROGRESS.md)。

@@ -17,16 +17,15 @@
 
 已通过 `git worktree remove` 移除 14 个无本地文件、无作业和环境引用、由远端分支可恢复的旧 detached 工作树，清理前目录占用合计 7,391,424 KiB（约 7.05 GiB）。剩余 70 个。删除清单位于 `<DataRoot>/xvla/robotwin-b0/evidence/clean-worktrees-20261116.tsv`。活跃工作树、固定归档引用、带本地文件的目录和 editable 安装引用的 `3dff0bddf7f1421fda0072f83ea9b59175ecc5aa` 均保留。
 
-以下为 `du -sh` 的占用估算。旧 OpenVLA 归档、权重和环境尚未删除。
+2026-11-16 按用户要求清理服务器的旧 OpenVLA 权重、部署缓存和实验产物。下表的删除量为清理前 `du -sk` 实测，合计约 48.69 GiB。路径和占用回执位于 `<DataRoot>/xvla/robotwin-b0/evidence/cleanup-openvla-20261116.tsv`。
 
-| 内容 | 服务器位置 | 占用与依赖 |
+| 内容 | 服务器位置 | 状态 |
 | --- | --- | --- |
-| 公开 OpenVLA-OFT SFT 权重 | `<DataRoot>/models/Openvla-oft-SFT-libero-spatial-traj1` | 15 GiB。RoboTwin 不使用，可按旧 [部署手册](../deployment.md) 的固定 snapshot 重下。 |
-| 旧 OpenVLA 实验 | `<DataRoot>/experiments/20261104-*` | 29 GiB；`core-v3` 24 GiB、`qualification-v3` 3.7 GiB、`qualification-v4` 1.3 GiB。包含未打进收尾包的原始训练产物与检查点。 |
-| 旧部署结果和日志 | `<DataRoot>/runs`、`logs`、`reports` | 632 MiB、276 KiB、5.6 MiB。保留可追溯证据。 |
-| LIBERO 原始数据 | `<DataRoot>/datasets/libero_raw` | 2.9 GiB，与旧 LIBERO 研究相关；不归为 OpenVLA 专用权重。 |
-| 旧 Conda 环境 | `<CondaRoot>/envs/vla_budget_rl` | 9.2 GiB。当前 RoboTwin 资产下载与派发器仍使用此环境的 Python，报告与权重下载入口也有引用。不能在本轮运行中移除。 |
-| 旧部署下载与构建缓存 | `<DataRoot>/cache` | 5.7 GiB（pip 4.4 GiB、Conda 735 MiB、wheels 635 MiB）。与 RoboTwin 的独立缓存目录分开；后续清理前按子目录确认是否存在唯一的本地构建 wheel。 |
-| 旧 Conda 缓存、源码 | `<CondaRoot>/pkgs-vla-budget`、服务器 `RLinf/openvla-oft` | 279 MiB、1.4 MiB。Conda 可有硬链接，删除缓存的实际释放量与目录占用不同。代码保留在 Git。 |
+| 公开 OpenVLA-OFT SFT 权重 | `<DataRoot>/models/Openvla-oft-SFT-libero-spatial-traj1` | 已删除，14.05 GiB。可按旧部署手册的固定 snapshot 重下。 |
+| 旧部署下载与构建缓存 | `<DataRoot>/cache` | 已删除，5.66 GiB。 |
+| 旧 OpenVLA 实验和部署产物 | `<DataRoot>/experiments/20261104-*` 的 9 个目录，及 `<DataRoot>/{runs,logs,reports}` | 已删除，28.98 GiB，含原始训练检查点、逐回合记录和部署报告。 |
+| 收尾归档和旧 X-VLA 产物 | `<DataRoot>/xvla/` | 收尾归档及旧 X-VLA 产物保留。 |
+| LIBERO 原始数据 | `<DataRoot>/datasets/libero_raw` | 保留，旧 X-VLA 也引用。 |
+| 旧 Conda 环境、个人环境包缓存和源码 | `<CondaRoot>/envs/vla_budget_rl`、`<CondaRoot>/pkgs-vla-budget`、服务器 `RLinf/openvla-oft` | 保留。当前 RoboTwin 资产下载和派发使用此环境的 Python。 |
 
 恢复命令、证据目录与数值口径见[协议与运行手册](README.md)。
