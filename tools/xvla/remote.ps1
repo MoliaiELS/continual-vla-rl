@@ -1,7 +1,7 @@
 param(
     [Parameter(Position=0)][ValidateSet('audit','sync','bootstrap','download','submit','status','logs','session','e2-start','e2-status','e3-start','e3-status','final-submit')][string]$Command='audit',
     [Parameter(Position=1)][string]$Value='unit',
-    [ValidateSet('libero','pt')][string]$Model='libero',
+    [ValidateSet('libero','pt','robotwin')][string]$Model='libero',
     [int]$Gpus=1,
     [ValidateSet('3090','4090')][string]$GpuModel='4090',
     [ValidateRange(0,9)][int]$StartTask=0,
@@ -143,10 +143,12 @@ echo XVLA_BOOTSTRAP_PID=`$!
 "@
  }
  'download' {
+  $downloadData=$data
+  if ($Model -eq 'robotwin') { $downloadData="$data/robotwin-b0" }
   Invoke-XRemote @"
 test -f '$snapshot/tools/xvla/download.py'
-mkdir -p '$data/logs'
-nohup flock -n '$data/download-$Model.lock' '$($settings.CondaRoot)/envs/vla_budget_rl/bin/python' '$snapshot/tools/xvla/download.py' '$data/models' '$Model' > '$data/logs/download-$Model.log' 2>&1 < /dev/null &
+mkdir -p '$downloadData/logs'
+nohup flock -n '$downloadData/download-$Model.lock' '$($settings.CondaRoot)/envs/vla_budget_rl/bin/python' '$snapshot/tools/xvla/download.py' '$downloadData/models' '$Model' > '$downloadData/logs/download-$Model.log' 2>&1 < /dev/null &
 echo XVLA_DOWNLOAD_PID=`$!
 "@
  }

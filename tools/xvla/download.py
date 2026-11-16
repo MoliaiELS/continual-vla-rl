@@ -18,6 +18,7 @@ os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 SPECS = {
     "libero": ("2toINF/X-VLA-Libero", "129e71460678b7236cee6fc9707f09d9fa0c3590"),
     "pt": ("2toINF/X-VLA-Pt", "c1c4a64a7e03ac5b95c468bf1578f3d03651b53b"),
+    "robotwin": ("2toINF/X-VLA-RoboTwin2", "a157c580cfe6f9f445614490f3bec1b2f9ef9f18"),
 }
 ALLOWED_SUFFIXES = (".json", ".safetensors", ".bin", ".model", ".txt", ".merges", ".vocab")
 
