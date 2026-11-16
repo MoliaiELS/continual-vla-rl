@@ -20,6 +20,7 @@ param(
     [ValidateSet('easy','hard','both')][string]$RobotLane='both',
     [ValidatePattern('^[a-z0-9_]+$')][string]$RobotTask,
     [ValidateRange(1,72)][int]$RobotHours=4,
+    [switch]$RootOnly,
     [ValidateSet('reference','expanded','stratified')][string]$ResetPool
 )
 $ErrorActionPreference='Stop'
@@ -178,6 +179,7 @@ PY
 '@
  }
  'sync' {
+  $makeSnapshot=if ($RootOnly) { 'no' } else { 'yes' }
   & git -C $repoRoot diff --quiet
   if ($LASTEXITCODE -ne 0) { throw 'Commit tracked changes before sync' }
   & git -C $repoRoot diff --cached --quiet
@@ -199,6 +201,10 @@ if [[ -n `$(git -C "`$code" status --porcelain) ]]; then
   echo 'Server RLinf checkout changed during sync. Review it before updating.' >&2
   exit 1
 fi
+refspec="+refs/heads/`$branch`:refs/remotes/origin/`$branch"
+if ! git -C "`$code" config --get-all remote.origin.fetch | grep -Fxq -e "`$refspec" -e '+refs/heads/*:refs/remotes/origin/*'; then
+  git -C "`$code" config --add remote.origin.fetch "`$refspec"
+fi
 git -C "`$code" fetch origin "refs/heads/`$branch`:refs/remotes/origin/`$branch"
 test "`$(git -C "`$code" rev-parse "origin/`$branch")" = '$sha'
 current=`$(git -C "`$code" symbolic-ref --quiet --short HEAD || true)
@@ -217,11 +223,14 @@ git -C "`$code" merge --ff-only "origin/`$branch"
 test "`$(git -C "`$code" rev-parse HEAD)" = '$sha'
 git -C "`$code" branch --set-upstream-to="origin/`$branch" "`$branch"
 git -C "`$code" submodule update --quiet --init third_party/rlinf
-test -e '$snapshot' || git -C "`$code" worktree add --quiet --detach '$snapshot' '$sha'
-test "`$(git -C '$snapshot' rev-parse HEAD)" = '$sha'
-git -C '$snapshot' submodule update --quiet --init third_party/rlinf
-test "`$(git -C '$snapshot/third_party/rlinf' rev-parse HEAD)" = 1bf78980d9339cbc67497eddceb9a1e3a74e2acc
-echo 'XVLA_SYNC_OK branch=$branch root=$($settings.CodeRoot) commit=$sha snapshot=$snapshot'
+if [[ '$makeSnapshot' == yes ]]; then
+  test -e '$snapshot' || git -C "`$code" worktree add --quiet --detach '$snapshot' '$sha'
+  test "`$(git -C '$snapshot' rev-parse HEAD)" = '$sha'
+  git -C '$snapshot' submodule update --quiet --init third_party/rlinf
+  test "`$(git -C '$snapshot/third_party/rlinf' rev-parse HEAD)" = 1bf78980d9339cbc67497eddceb9a1e3a74e2acc
+  echo 'XVLA_JOB_SNAPSHOT $snapshot'
+fi
+echo 'XVLA_SYNC_OK branch=$branch root=$($settings.CodeRoot) commit=$sha'
 "@
  }
  'bootstrap' {

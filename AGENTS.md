@@ -4,7 +4,7 @@
 
 - 2026-11-16 按用户要求结束旧 X-VLA-Pt 和 OpenVLA-OFT 实验线。当前状态见 `PROGRESS.md`，结果与目录见 `docs/archive/2026-11-16-experiment-closeout.md`。
 - 当前新实验为 X-VLA 在 RoboTwin 2.0 Easy／Hard 的冻结基座评测，见 `docs/robotwin/README.md`。保留旧固定提交、日志、权重和封存面板。
-- 日常先改本机，提交后用 `tools/xvla/remote.ps1 sync` 推送并快进服务器 `RLinf` 根目录到当前 X-VLA 分支。该目录用于 SSH 查阅和编辑，存在远端修改时不同步覆盖。Slurm 仍以 `RLinf-runs/<完整提交>` 固定工作树启动。
+- 日常先改本机，提交后用 `tools/xvla/remote.ps1 sync -RootOnly` 推送并快进服务器 `RLinf` 根目录到当前 X-VLA 分支。该目录用于 SSH 查阅和编辑，存在远端修改时不同步覆盖。准备 Slurm 作业时用不加 `-RootOnly` 的 `sync` 生成 `RLinf-runs/<完整提交>` 固定工作树。
 
 ## 历史分支：X-VLA 接入
 
