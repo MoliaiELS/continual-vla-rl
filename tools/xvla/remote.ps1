@@ -1,5 +1,5 @@
 param(
-    [Parameter(Position=0)][ValidateSet('audit','sync','bootstrap','download','submit','status','logs','session','e2-start','e2-status','e3-start','e3-status','final-submit','robotwin-prepare','robotwin-status','robotwin-logs','robotwin-submit','robotwin-report','robotwin-run')][string]$Command='audit',
+    [Parameter(Position=0)][ValidateSet('audit','sync','bootstrap','download','submit','status','logs','session','e2-start','e2-status','e3-start','e3-status','final-submit','robotwin-prepare','robotwin-extract','robotwin-status','robotwin-logs','robotwin-submit','robotwin-report','robotwin-run')][string]$Command='audit',
     [Parameter(Position=1)][string]$Value='unit',
     [ValidateSet('libero','pt','robotwin')][string]$Model='libero',
     [int]$Gpus=1,
@@ -81,6 +81,19 @@ test -f '$snapshot/tools/xvla/robotwin/prepare.sh'
 mkdir -p '$robotData/logs'
 nohup flock -n '$robotData/prepare-$Value.lock' bash '$snapshot/tools/xvla/robotwin/prepare.sh' '$Value' >> '$robotData/logs/prepare-$Value.log' 2>&1 < /dev/null &
 echo ROBOTWIN_PREPARE_PID=`$!
+"@
+ }
+ 'robotwin-extract' {
+  Invoke-XRemote @"
+tool='$robotSnapshot/tools/xvla/robotwin'
+test -f "`$tool/extract_assets.sh"
+source "`$tool/runtime.env"
+test -s '$robotData/archives'/"`$ASSETS_REV/verified.json"
+mkdir -p '$robotData/logs' '$robotData/evidence'
+printf -v command '%q ' bash "`$tool/extract_assets.sh"
+jobid=`$(sbatch --parsable --partition='$($settings.Partition)' --nodelist=4090node3 --exclude=4090node1 --ntasks=1 --cpus-per-task=2 --time=01:00:00 --job-name=rw-b0-extract --output='$robotData/logs/%j.out' --error='$robotData/logs/%j.err' --export=ALL --wrap="`$command")
+printf '%s\t%s\t%s\t%s\t%s\t%s\n' "`$jobid" extract both cpu '$robotSha' '' >> '$robotData/evidence/jobs.tsv'
+echo ROBOTWIN_JOB_ID="`$jobid"
 "@
  }
  'robotwin-status' {
