@@ -22,7 +22,7 @@ else
     # Count every own allocated or pending GPU, including other FYP runs, and
     # refuse a third. Jobs are submitted one at a time under this suite's lock.
     own="$(squeue -h -u "$(id -un)" -o '%b')"
-    own_gpus="$(awk 'BEGIN {n=0} {for (i=1;i<=NF;i++) if ($i ~ /^gres:gpu(:[[:alnum:]_-]+)?:[0-9]+$/) {split($i,a,":"); n+=a[length(a)]}} END{print n}' <<< "${own//,/ }")"
+    own_gpus="$(awk 'BEGIN {n=0} {for (i=1;i<=NF;i++) if ($i ~ /^gres[/:]gpu(:[[:alnum:]_-]+)?:[0-9]+$/) {split($i,a,":"); n+=a[length(a)]}} END{print n}' <<< "${own//,/ }")"
     if (( own_gpus >= 2 )); then echo 'Two own GPUs are already allocated or requested' >&2; exit 1; fi
     gres=("--gres=gpu:$gpu:1")
 fi
