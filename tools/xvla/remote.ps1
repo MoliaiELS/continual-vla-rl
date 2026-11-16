@@ -26,6 +26,14 @@ $data="$($settings.DataRoot)/xvla"
 $prefix="$($settings.CondaRoot)/envs/xvla_rlinf"
 function Invoke-XRemote([string]$Script) {
     $preamble="export FYP_DATA_ROOT='$($settings.DataRoot)' FYP_CONDA_ROOT='$($settings.CondaRoot)' FYP_XVLA_DATA='$data' FYP_XVLA_ENV='$prefix'`n"
+    if ($Command -in @('e2-start','e3-start','final-submit')) {
+        $preamble += @'
+if [[ -f "$FYP_XVLA_DATA/protocol_20261110/archive.json" ]]; then
+    echo 'X-VLA protocol 2026-11-10 is archived. See docs/archive/2026-11-16-experiment-closeout.md.' >&2
+    exit 1
+fi
+'@ + "`n"
+    }
     ($preamble+$Script).Replace("`r",'') | & ssh -T -o BatchMode=yes -o ConnectTimeout=15 $settings.SshHost "tr -d '\r' | bash -se"
     if ($LASTEXITCODE -ne 0) { throw "X-VLA remote failed: $LASTEXITCODE" }
 }

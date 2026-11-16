@@ -1,6 +1,15 @@
 {
   "schema_version": 1,
   "protocol_id": "xvla-20261110",
+  "lifecycle": {
+    "state": "ARCHIVED",
+    "archived_at": "2026-11-16T19:56:49+08:00",
+    "reason": "user_changed_experiment_direction",
+    "closeout_document": "docs/archive/2026-11-16-experiment-closeout.md",
+    "remote_marker": "protocol_20261110/archive.json",
+    "remote_evidence_zip": "protocol_20261110/archive/2026-11-16/closeout-evidence.zip",
+    "evidence_zip_sha256": "de4626b92fd9553c3ab98a8ae1cc2c7546d23187d5ec52f86422fe1cd2c985e6"
+  },
   "split_path": "configs/xvla/protocol_20261110/split.json",
   "split_sha256": "fa4ad56a5fd7f5b08b9612b7fefa1b3e156d63feb0df1d8aa60522fe062ce651",
   "data_paths_are_relative_to": "FYP_XVLA_DATA",

@@ -1,6 +1,11 @@
 # FYP：共享 VLA 强化后训练
 
-## 当前分支：X-VLA 接入准备
+## 当前状态：旧实验已归档
+
+- 2026-11-16 按用户要求结束旧 X-VLA-Pt 和 OpenVLA-OFT 实验线。当前状态见 `PROGRESS.md`，结果与目录见 `docs/archive/2026-11-16-experiment-closeout.md`。
+- 新实验方向待用户明确。保留旧固定提交、日志、权重和封存面板。下列内容用于维护和复查旧实验。
+
+## 历史分支：X-VLA 接入
 
 - `codex/xvla-integration` 从基线 `f2965db7a1b0c6313ed1ded2575a5ea515e0aea4` 建立；当前阶段实际实现并小规模验证 X-VLA。入口为 `docs/xvla/README.md` 和 `CODEX_HANDOFF.md`。
 - 新上游为独立远端 `rlinf-upstream`（`RLinf/RLinf`），参考 commit 固定为 `1bf78980d9339cbc67497eddceb9a1e3a74e2acc`。原 `upstream` 仍指 Simple Recipe 作者仓库，不改其含义。

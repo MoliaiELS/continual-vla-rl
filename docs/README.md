@@ -1,9 +1,10 @@
 # FYP 目录索引
 
-当天的作业、结果和后续安排从根目录的 [PROGRESS.md](../PROGRESS.md) 开始。下表区分实验说明、机器可读登记和运行产物，便于取证和交接。
+项目状态见根目录 [PROGRESS.md](../PROGRESS.md)。截至 2026-11-16，旧实验已经归档，新方向待定。[实验归档](archive/2026-11-16-experiment-closeout.md)记录完成结果、停止位置和证据包。
 
 | 查找内容 | 位置 | 管理方式 |
 | --- | --- | --- |
+| 旧实验收尾结果 | [实验归档](archive/2026-11-16-experiment-closeout.md)、`docs/reports/2026-11-16-experiment-closeout/` | Git 保存归档说明，本机证据包有服务器副本 |
 | X-VLA 实验配置、冻结初态、作业 ID | [协议执行登记](xvla_protocol_20261110_execution.md)、[注册表](../configs/xvla/protocol_20261110/registry.json)、[任务划分](../configs/xvla/protocol_20261110/split.json) | Git；运行前锁定协议 |
 | X-VLA 实现、环境、命令 | [接入入口](xvla/README.md)、[运行手册](xvla_runbook.md)、[接入审计](xvla_integration_audit.md)、[调度工具](../tools/xvla/) | Git；上游参考放在 `docs/xvla/reference/`，运行时在 `third_party/rlinf/` |
 | X-VLA-Pt 源任务的早期训练和诊断 | [源任务实验](xvla_pt_source_experiment.md)、[实现交接](../CODEX_HANDOFF.md) | Git；保留逐阶段证据 |
@@ -17,7 +18,7 @@
 | --- | --- |
 | Slurm 日志 | `logs/<job>.out`、`logs/<job>.err` |
 | 提交回执、权重、控制步、逐回合评估和资源记录 | `runs/submission-<job>.json`、`runs/<job>/` |
-| E2 / E3 派发表、最终评估清单 | `protocol_20261110/` |
+| E2 / E3 原始派发表、停止标记 | `protocol_20261110/`，收尾资料在 `archive/2026-11-16/` 子目录 |
 | 原始示教、转换产物与审计 | `datasets/`、`evidence/` |
 | 权重快照 | `models/` |
 
