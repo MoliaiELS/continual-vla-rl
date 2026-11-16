@@ -55,9 +55,10 @@ switch ($Command) {
  'robotwin-run' {
   if ($Value -notmatch '^[0-9]+$') { throw 'Requires the CuRobo Slurm build job ID' }
   Invoke-XRemote @"
-test -f '$robotSnapshot/tools/xvla/robotwin/dispatch.py'
+test -f '$snapshot/tools/xvla/robotwin/dispatch.py'
+test "`$(git -C '$robotSnapshot' rev-parse HEAD)" = '$robotSha'
 mkdir -p '$robotData/dispatch/$robotSha'
-nohup flock -n '$robotData/dispatch.lock' '$($settings.CondaRoot)/envs/vla_budget_rl/bin/python' -u '$robotSnapshot/tools/xvla/robotwin/dispatch.py' --build-job '$Value' --partition '$($settings.Partition)' --gpu '$GpuModel' --hours '$RobotHours' >> '$robotData/dispatch/$robotSha/dispatch.log' 2>&1 < /dev/null &
+nohup flock -n '$robotData/dispatch.lock' '$($settings.CondaRoot)/envs/vla_budget_rl/bin/python' -u '$snapshot/tools/xvla/robotwin/dispatch.py' --evaluation-root '$robotSnapshot' --build-job '$Value' --partition '$($settings.Partition)' --gpu '$GpuModel' --hours '$RobotHours' >> '$robotData/dispatch/$robotSha/dispatch.log' 2>&1 < /dev/null &
 echo ROBOTWIN_DISPATCH_PID=`$!
 "@
  }
@@ -77,9 +78,9 @@ bash '$robotSnapshot/tools/xvla/robotwin/submit.sh' '$Value' '$($settings.Partit
  'robotwin-prepare' {
   if ($Value -notin @('env','assets','link')) { throw 'Requires env, assets, or link' }
   Invoke-XRemote @"
-test -f '$snapshot/tools/xvla/robotwin/prepare.sh'
+test -f '$robotSnapshot/tools/xvla/robotwin/prepare.sh'
 mkdir -p '$robotData/logs'
-nohup flock -n '$robotData/prepare-$Value.lock' bash '$snapshot/tools/xvla/robotwin/prepare.sh' '$Value' >> '$robotData/logs/prepare-$Value.log' 2>&1 < /dev/null &
+nohup flock -n '$robotData/prepare-$Value.lock' bash '$robotSnapshot/tools/xvla/robotwin/prepare.sh' '$Value' >> '$robotData/logs/prepare-$Value.log' 2>&1 < /dev/null &
 echo ROBOTWIN_PREPARE_PID=`$!
 "@
  }

@@ -24,18 +24,22 @@ def output(*cmd):
 class Dispatch:
     def __init__(self, config):
         self.cfg = config
+        experiment_config = vars(config).copy()
+        evaluation_root = experiment_config.pop("evaluation_root", None) or HERE.parents[2]
+        evaluation_root = evaluation_root.resolve(strict=True)
+        self.evaluation_tools = evaluation_root / "tools/xvla/robotwin"
         self.data = Path(os.environ["FYP_ROBOTWIN_DATA"])
-        self.code = output("git", "-C", str(HERE), "rev-parse", "HEAD")
+        self.code = output("git", "-C", str(evaluation_root), "rev-parse", "HEAD")
+        self.rev = dict(line.split("=", 1) for line in (self.evaluation_tools / "runtime.env").read_text().splitlines())
         self.panel = self.data / "panels" / self.code
         self.report = self.data / "reports" / self.code
         self.path = self.data / "dispatch" / self.code / "state.json"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.state = json.loads(self.path.read_text()) if self.path.exists() else {
-            "commit": self.code, "jobs": {}, "configuration": vars(config),
+            "commit": self.code, "jobs": {}, "configuration": experiment_config,
         }
-        if self.state["configuration"] != vars(config):
+        if self.state["configuration"] != experiment_config:
             raise ValueError("Dispatch arguments differ from existing experiment")
-        self.rev = dict(line.split("=", 1) for line in (HERE / "runtime.env").read_text().splitlines())
 
     def save(self, stage, **extra):
         self.state.update(stage=stage, at_unix=time.time(), **extra)
@@ -71,7 +75,7 @@ class Dispatch:
             return jobs[-1]
         job = self.journal_submission(stage, lane, jobs)
         if job is None:
-            msg = output("bash", str(HERE / "submit.sh"), stage, self.cfg.partition, self.cfg.gpu, lane, str(hours))
+            msg = output("bash", str(self.evaluation_tools / "submit.sh"), stage, self.cfg.partition, self.cfg.gpu, lane, str(hours))
             job = re.search(r"ROBOTWIN_JOB_ID=(\d+)", msg)[1]
         jobs.append(job)
         self.save(stage, submitting={"lane": lane, "job": job})
@@ -99,22 +103,36 @@ class Dispatch:
             time.sleep(INTERVAL)
 
     def aggregate(self, phase):
-        subprocess.run([os.sys.executable, str(HERE / "summarize.py"), "--input", str(self.panel),
+        subprocess.run([os.sys.executable, str(self.evaluation_tools / "summarize.py"), "--input", str(self.panel),
                         "--phase", phase, "--output", str(self.report / phase)], check=True)
         return json.loads((self.report / phase / "summary.json").read_text(encoding="utf-8"))
 
-    def estimate(self, lanes):
+    def estimate(self, lanes, evidence):
         info = {}
         for lane in lanes:
             job = self.state["jobs"][f"smoke:{lane}"][-1]
-            rows = [json.loads(s) for s in (self.data / "jobs" / job / "shards.jsonl").read_text().splitlines()]
-            stages = {step: sum(row["seconds"] for row in rows if row["step"] == step)
-                      for step in ("screen", "parity", "eval")}
-            seconds = (stages["screen"] + stages["eval"]) / 10
-            info[lane] = dict(job=job, measured_episodes=10, stage_seconds=stages, seconds_per_episode=seconds,
-                              first_batch_gpu_hours=5000 * seconds / 3600, full_gpu_hours=7000 * seconds / 3600)
-        info["limits"] = ("Two tasks per lane; includes screening and repeated five-episode process startup. Excludes parity, "
-                          "coverage, queueing, transfer, failures and retry. Other tasks or contention can change throughput.")
+            lane_summary = evidence["overall"][lane]
+            completed = lane_summary["cumulative"]["finished"]
+            screen_seconds = lane_summary["prescreen"]["attempt_wall_seconds"]
+            eval_seconds = sum(
+                task["conditions"][lane]["cumulative"]["attempt_wall_seconds"]
+                for task in evidence["tasks"]
+            )
+            screen_per_episode = screen_seconds / completed
+            eval_per_episode = eval_seconds / completed
+            first_batch_gpu_hours = (7000 * screen_per_episode + 5000 * eval_per_episode) / 3600
+            full_gpu_hours = 7000 * (screen_per_episode + eval_per_episode) / 3600
+            info[lane] = dict(job=job, measured_episodes=completed,
+                              stage_seconds={"screen": screen_seconds, "eval": eval_seconds},
+                              seconds_per_episode=screen_per_episode + eval_per_episode,
+                              first_batch_gpu_hours=first_batch_gpu_hours, full_gpu_hours=full_gpu_hours)
+        info["limits"] = (
+            "Two smoke tasks per lane; journal times include candidate screening and policy attempts, "
+            "including attempts retained from earlier targeted jobs. The first batch freezes all "
+            "7,000 initial states per condition before or during its evaluation of the first 5,000. "
+            "Estimates exclude process startup, parity, coverage, queueing and transfer. "
+            "Acceptance rates and per-episode times can differ across tasks."
+        )
         (self.report / "throughput.json").write_text(json.dumps(info, indent=2) + "\n")
 
     def run(self):
@@ -131,7 +149,7 @@ class Dispatch:
         assets = self.data / "sim-assets" / self.rev["ASSETS_REV"]
         self.wait_download(model / "verified.json", self.data / "download-robotwin.lock")
         self.wait_download(assets / ".extracted", self.data / "prepare-assets.lock")
-        subprocess.run(["flock", str(self.data / "prepare-link.lock"), "bash", str(HERE / "prepare.sh"), "link"], check=True)
+        subprocess.run(["flock", str(self.data / "prepare-link.lock"), "bash", str(self.evaluation_tools / "prepare.sh"), "link"], check=True)
         lanes = ("easy", "hard")
         smoke = self.wait_for("smoke", lanes, 4)
         evidence = self.aggregate("smoke")
@@ -139,7 +157,7 @@ class Dispatch:
             totals = evidence["overall"][lane]["cumulative"]
             if smoke[lane] != ("COMPLETED", "0:0") or totals["finished"] != 10 or totals["unresolved"]:
                 raise RuntimeError(f"Parity or smoke did not qualify {lane}; inspect the recorded jobs")
-        self.estimate(lanes)
+        self.estimate(lanes, evidence)
         self.wait_for("coverage", lanes, 4)  # A task-specific gap is not a global gate.
         self.wait_for("formal", lanes, self.cfg.hours)
         self.aggregate("formal")
@@ -157,6 +175,7 @@ if __name__ == "__main__":
     cli.add_argument("--partition", required=True)
     cli.add_argument("--gpu", choices=("4090", "3090"), default="4090")
     cli.add_argument("--hours", type=int, default=48)
+    cli.add_argument("--evaluation-root", type=Path, help="pinned evaluation worktree (defaults to this worktree)")
     dispatch = Dispatch(cli.parse_args())
     try:
         raise SystemExit(dispatch.run())
