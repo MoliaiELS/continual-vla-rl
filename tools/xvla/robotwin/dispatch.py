@@ -15,6 +15,7 @@ INTERVAL = 40
 DONE = {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY", "PREEMPTED",
         "BOOT_FAIL", "DEADLINE", "REVOKED"}
 RESUMABLE = {"TIMEOUT", "NODE_FAIL", "PREEMPTED"}
+RECOVERY_COMMIT = "9baa17360abe242cb36e8f9c78f0aadbe64b3bee"
 
 
 def output(*cmd):
@@ -27,9 +28,13 @@ class Dispatch:
         experiment_config = vars(config).copy()
         evaluation_root = experiment_config.pop("evaluation_root", None) or HERE.parents[2]
         evaluation_root = evaluation_root.resolve(strict=True)
+        self.recover_prescreen = experiment_config.pop("recover_prescreen", False)
+        self.evaluation_root = evaluation_root
         self.evaluation_tools = evaluation_root / "tools/xvla/robotwin"
         self.data = Path(os.environ["FYP_ROBOTWIN_DATA"])
         self.code = output("git", "-C", str(evaluation_root), "rev-parse", "HEAD")
+        if self.recover_prescreen and self.code != RECOVERY_COMMIT:
+            raise ValueError("Prescreen recovery is scoped to the original frozen evaluation")
         self.rev = dict(line.split("=", 1) for line in (self.evaluation_tools / "runtime.env").read_text().splitlines())
         self.panel = self.data / "panels" / self.code
         self.report = self.data / "reports" / self.code
@@ -40,6 +45,8 @@ class Dispatch:
         }
         if self.state["configuration"] != experiment_config:
             raise ValueError("Dispatch arguments differ from existing experiment")
+        if self.recover_prescreen:
+            self.state["prescreen_recovery_commit"] = output("git", "-C", str(HERE), "rev-parse", "HEAD")
 
     def save(self, stage, **extra):
         self.state.update(stage=stage, at_unix=time.time(), **extra)
@@ -75,11 +82,32 @@ class Dispatch:
             return jobs[-1]
         job = self.journal_submission(stage, lane, jobs)
         if job is None:
-            msg = output("bash", str(self.evaluation_tools / "submit.sh"), stage, self.cfg.partition, self.cfg.gpu, lane, str(hours))
+            submit = self.evaluation_tools / "submit.sh"
+            extra = ()
+            if self.recover_prescreen and stage in {"formal", "extension"}:
+                submit = HERE / "submit.sh"
+                extra = ("", str(self.evaluation_root))
+            msg = output("bash", str(submit), stage, self.cfg.partition, self.cfg.gpu, lane, str(hours), *extra)
             job = re.search(r"ROBOTWIN_JOB_ID=(\d+)", msg)[1]
         jobs.append(job)
         self.save(stage, submitting={"lane": lane, "job": job})
         return job
+
+    def old_prescreen_failed(self, job):
+        if not self.recover_prescreen:
+            return False
+        launches = self.data / "evidence/prescreen-recovery-jobs.tsv"
+        if launches.exists() and any(row.split("\t", 1)[0] == job for row in launches.read_text().splitlines()):
+            return False
+        shards = self.data / "jobs" / job / "shards.jsonl"
+        if not shards.is_file():
+            return False
+        for line in shards.read_bytes().splitlines(keepends=True):
+            if line.endswith(b"\n"):
+                row = json.loads(line)
+                if row["step"] == "screen" and row["returncode"]:
+                    return True
+        return False
 
     def wait_for(self, stage, lanes, hours):
         jobs = {lane: self.start(stage, lane, hours) for lane in lanes}
@@ -87,7 +115,9 @@ class Dispatch:
         while True:
             states = {lane: self.accounting(job) for lane, job in jobs.items()}
             for lane, (state, _) in states.items():
-                if stage in {"formal", "extension"} and state in RESUMABLE and retries[lane] < 8:
+                if stage not in {"formal", "extension"} or retries[lane] >= 8:
+                    continue
+                if state in RESUMABLE or (state == "FAILED" and self.old_prescreen_failed(jobs[lane])):
                     retries[lane] += 1
                     jobs[lane] = self.start(stage, lane, hours, retry=True)
                     states[lane] = ("RESUBMITTED", None)
@@ -135,7 +165,7 @@ class Dispatch:
         )
         (self.report / "throughput.json").write_text(json.dumps(info, indent=2) + "\n")
 
-    def run(self):
+    def preflight(self, lanes):
         if self.accounting(self.cfg.build_job) != ("COMPLETED", "0:0"):
             self.save("waiting_for_build")
             while self.accounting(self.cfg.build_job)[0] not in DONE:
@@ -150,7 +180,6 @@ class Dispatch:
         self.wait_download(model / "verified.json", self.data / "download-robotwin.lock")
         self.wait_download(assets / ".extracted", self.data / "prepare-assets.lock")
         subprocess.run(["flock", str(self.data / "prepare-link.lock"), "bash", str(self.evaluation_tools / "prepare.sh"), "link"], check=True)
-        lanes = ("easy", "hard")
         smoke = self.wait_for("smoke", lanes, 4)
         evidence = self.aggregate("smoke")
         for lane in lanes:
@@ -159,6 +188,13 @@ class Dispatch:
                 raise RuntimeError(f"Parity or smoke did not qualify {lane}; inspect the recorded jobs")
         self.estimate(lanes, evidence)
         self.wait_for("coverage", lanes, 4)  # A task-specific gap is not a global gate.
+
+    def run(self):
+        lanes = ("easy", "hard")
+        if not any(self.state["jobs"].get(f"formal:{lane}") for lane in lanes):
+            self.preflight(lanes)
+        elif self.recover_prescreen:
+            self.save("formal")
         self.wait_for("formal", lanes, self.cfg.hours)
         self.aggregate("formal")
         self.wait_for("extension", lanes, self.cfg.hours)
@@ -176,6 +212,7 @@ if __name__ == "__main__":
     cli.add_argument("--gpu", choices=("4090", "3090"), default="4090")
     cli.add_argument("--hours", type=int, default=48)
     cli.add_argument("--evaluation-root", type=Path, help="pinned evaluation worktree (defaults to this worktree)")
+    cli.add_argument("--recover-prescreen", action="store_true", help="recover expert no-pose exclusions on the frozen run")
     dispatch = Dispatch(cli.parse_args())
     try:
         raise SystemExit(dispatch.run())

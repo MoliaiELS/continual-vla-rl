@@ -24,6 +24,8 @@ def append(path, record):
 
 
 def run(args):
+    if args.pinned_evaluation_root is not None and args.mode not in {"formal", "extension"}:
+        raise ValueError("Prescreen recovery requires formal or extension")
     if args.mode == "probe":
         from bind_renderer import probe
 
@@ -43,6 +45,13 @@ def run(args):
 
 
 def run_lane(args, job, output, code):
+    evaluation_tools = HERE
+    runner = [sys.executable, "-u", "-m", "tools.xvla.robotwin.runner"]
+    screen_runner = runner
+    if args.pinned_evaluation_root is not None:
+        evaluation_tools = args.pinned_evaluation_root / "tools/xvla/robotwin"
+        screen_runner = [sys.executable, "-u", str(HERE / "prescreen_recovery.py"),
+                         "--pinned-evaluation-root", str(args.pinned_evaluation_root)]
     conditions = ("easy", "hard") if args.lane == "both" else (args.lane,)
     smoke = args.mode in ("smoke", "coverage")
     if args.mode == "smoke":
@@ -52,7 +61,7 @@ def run_lane(args, job, output, code):
     elif args.mode == "extension":
         tasks = PRIORITY
     else:
-        tasks_json = json.loads((HERE / "tasks.json").read_text(encoding="utf-8"))
+        tasks_json = json.loads((evaluation_tools / "tasks.json").read_text(encoding="utf-8"))
         tasks = tuple(item["task_id"] for item in tasks_json["tasks"])
         assert len(set(tasks)) == 50 and set(PRIORITY) <= set(tasks)
         tasks = PRIORITY + tuple(t for t in tasks if t not in PRIORITY)
@@ -79,7 +88,8 @@ def run_lane(args, job, output, code):
                 ok = True
                 for step, opts in steps:
                     started = time.monotonic()
-                    proc = subprocess.run([sys.executable, "-u", "-m", "tools.xvla.robotwin.runner", step] + base + opts)
+                    command = screen_runner if step == "screen" else runner
+                    proc = subprocess.run(command + [step] + base + opts)
                     state = dict(task_id=task, condition=condition, mode=args.mode, step=step, batch=batch,
                                  returncode=proc.returncode, seconds=round(time.monotonic() - started, 3))
                     append(job / "shards.jsonl", state)
@@ -125,4 +135,5 @@ if __name__ == "__main__":
     parser.add_argument("mode", choices=["probe", "smoke", "coverage", "formal", "extension"])
     parser.add_argument("--lane", choices=["easy", "hard", "both"], default="both")
     parser.add_argument("--task")
+    parser.add_argument("--pinned-evaluation-root", type=Path)
     raise SystemExit(run(parser.parse_args()))

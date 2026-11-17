@@ -6,7 +6,26 @@ mode="${1:?mode}"
 shift
 tool_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$tool_dir/../../.." && pwd)"
-source "$tool_dir/runtime.env"
+evaluation_tools="$tool_dir"
+panel_args=()
+if [[ "${1:-}" == --pinned-evaluation-root ]]; then
+    if [[ "$mode" != formal && "$mode" != extension ]]; then
+        echo 'Prescreen recovery requires formal or extension' >&2
+        exit 1
+    fi
+    repo="$(cd "${2:?pinned evaluation root}" && pwd -P)"
+    shift 2
+    if [[ "$(git -C "$repo" rev-parse HEAD)" != 9baa17360abe242cb36e8f9c78f0aadbe64b3bee ]]; then
+        echo 'Prescreen recovery requires the original RoboTwin evaluation commit' >&2
+        exit 1
+    fi
+    git -C "$repo" diff --quiet HEAD -- tools/xvla
+    git -C "$tool_dir" ls-files --error-unmatch prescreen_recovery.py prescreen_failures.py >/dev/null
+    git -C "$tool_dir" diff --quiet HEAD -- job.sh panel.py prescreen_recovery.py prescreen_failures.py
+    evaluation_tools="$repo/tools/xvla/robotwin"
+    panel_args=(--pinned-evaluation-root "$repo")
+fi
+source "$evaluation_tools/runtime.env"
 export FYP_ROBOTWIN_ROOT="$FYP_ROBOTWIN_CODE/RoboTwin-$ROBOTWIN_REV"
 export FYP_ROBOTWIN_XVLA="$FYP_ROBOTWIN_CODE/X-VLA-$XVLA_REV"
 export FYP_ROBOTWIN_CUROBO="$FYP_ROBOTWIN_CODE/curobo-$CUROBO_REV"
@@ -37,9 +56,9 @@ export PYTHONPATH="$repo"
 test -s "$FYP_ROBOTWIN_DATA/evidence/build.complete"
 test "$(git -C third_party/rlinf rev-parse HEAD)" = "$RLINF_REV"
 rm -f "$FYP_ROBOTWIN_JOB/vulkan-device.txt"
-python -u "$tool_dir/job_runtime.py" "$mode"
+python -u "$evaluation_tools/job_runtime.py" "$mode"
 export FYP_ROBOTWIN_VULKAN_DEVICE="$(cat "$FYP_ROBOTWIN_JOB/vulkan-device.txt")"
 python -u "$repo/tools/xvla/resource_monitor.py" &
 monitor_pid=$!
 trap 'kill -TERM "$monitor_pid" 2>/dev/null || true; wait "$monitor_pid" || true' EXIT
-python -u "$tool_dir/panel.py" "$mode" "$@"
+python -u "$tool_dir/panel.py" "$mode" "${panel_args[@]}" "$@"
