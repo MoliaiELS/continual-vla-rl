@@ -28,13 +28,12 @@ class Dispatch:
         experiment_config = vars(config).copy()
         evaluation_root = experiment_config.pop("evaluation_root", None) or HERE.parents[2]
         evaluation_root = evaluation_root.resolve(strict=True)
-        self.recover_prescreen = experiment_config.pop("recover_prescreen", False)
+        recover_prescreen = experiment_config.pop("recover_prescreen", False)
+        easy_first = experiment_config.pop("easy_first", False)
         self.evaluation_root = evaluation_root
         self.evaluation_tools = evaluation_root / "tools/xvla/robotwin"
         self.data = Path(os.environ["FYP_ROBOTWIN_DATA"])
         self.code = output("git", "-C", str(evaluation_root), "rev-parse", "HEAD")
-        if self.recover_prescreen and self.code != RECOVERY_COMMIT:
-            raise ValueError("Prescreen recovery is scoped to the original frozen evaluation")
         self.rev = dict(line.split("=", 1) for line in (self.evaluation_tools / "runtime.env").read_text().splitlines())
         self.panel = self.data / "panels" / self.code
         self.report = self.data / "reports" / self.code
@@ -45,7 +44,11 @@ class Dispatch:
         }
         if self.state["configuration"] != experiment_config:
             raise ValueError("Dispatch arguments differ from existing experiment")
+        self.easy_first = easy_first or self.state.get("easy_first", False)
+        self.recover_prescreen = recover_prescreen or bool(self.state.get("prescreen_recovery_commit"))
         if self.recover_prescreen:
+            if self.code != RECOVERY_COMMIT:
+                raise ValueError("Prescreen recovery is scoped to the original frozen evaluation")
             self.state["prescreen_recovery_commit"] = output("git", "-C", str(HERE), "rev-parse", "HEAD")
 
     def save(self, stage, **extra):
@@ -189,15 +192,74 @@ class Dispatch:
         self.estimate(lanes, evidence)
         self.wait_for("coverage", lanes, 4)  # A task-specific gap is not a global gate.
 
+    @staticmethod
+    def hard_job_fields(job):
+        status = output("scontrol", "show", "job", job, "-o")
+        fields = dict(re.findall(r"(?:^| )([A-Za-z]+)=([^ ]+)", status))
+        if (fields.get("JobId"), fields.get("JobName")) != (job, "rw-b0-formal-hard"):
+            raise RuntimeError(f"Unexpected job while handling Easy priority: {job}")
+        return fields
+
+    def defer_hard(self):
+        jobs = self.state["jobs"].get("formal:hard", [])
+        if not jobs or self.state.get("easy_confirmed_complete"):
+            return
+        job = jobs[-1]
+        fields = self.hard_job_fields(job)
+        if fields["JobState"] != "PENDING":
+            raise RuntimeError(f"Hard job {job} has already left the pending state")
+        if fields["Priority"] != "0":
+            output("scontrol", "hold", job)
+            fields = self.hard_job_fields(job)
+        if fields["Reason"] != "JobHeldUser":
+            raise RuntimeError(f"Hard job {job} did not enter a user hold: {fields['Reason']}")
+        self.save("formal", held_hard_job=job)
+
+    def release_hard(self):
+        job = self.state.get("held_hard_job")
+        if not job or self.state.get("released_hard_job") == job:
+            return
+        fields = self.hard_job_fields(job)
+        if fields["JobState"] == "CANCELLED":
+            raise RuntimeError(f"Held Hard job {job} was cancelled before release")
+        if fields["JobState"] == "PENDING" and fields["Priority"] == "0":
+            if fields["Reason"] != "JobHeldUser":
+                raise RuntimeError(f"Hard job {job} has a separate hold: {fields['Reason']}")
+            output("scontrol", "release", job)
+        self.save("formal", released_hard_job=job)
+
+    def require_easy(self, cohort, count):
+        totals = self.aggregate("formal")["overall"]["easy"][cohort]
+        if totals["finished"] != count or totals["unresolved"]:
+            raise RuntimeError(f"Easy {cohort} incomplete: {totals['finished']}/{count}, "
+                               f"{totals['unresolved']} unresolved")
+
+    def run_easy_first(self):
+        self.save("formal", easy_first=True)
+        if not self.state.get("easy_confirmed_complete"):
+            self.defer_hard()
+            self.wait_for("formal", ("easy",), self.cfg.hours)
+            self.require_easy("first_batch", 5000)
+            self.wait_for("extension", ("easy",), self.cfg.hours)
+            self.require_easy("cumulative", 7000)
+            self.save("extension", easy_confirmed_complete=True)
+        self.release_hard()
+        self.wait_for("formal", ("hard",), self.cfg.hours)
+        self.aggregate("formal")
+        self.wait_for("extension", ("hard",), self.cfg.hours)
+
     def run(self):
         lanes = ("easy", "hard")
         if not any(self.state["jobs"].get(f"formal:{lane}") for lane in lanes):
             self.preflight(lanes)
         elif self.recover_prescreen:
             self.save("formal")
-        self.wait_for("formal", lanes, self.cfg.hours)
-        self.aggregate("formal")
-        self.wait_for("extension", lanes, self.cfg.hours)
+        if self.easy_first:
+            self.run_easy_first()
+        else:
+            self.wait_for("formal", lanes, self.cfg.hours)
+            self.aggregate("formal")
+            self.wait_for("extension", lanes, self.cfg.hours)
         evidence = self.aggregate("formal")
         totals = {lane: evidence["overall"][lane]["cumulative"] for lane in lanes}
         done = all(t["finished"] == 7000 and not t["unresolved"] for t in totals.values())
@@ -213,6 +275,7 @@ if __name__ == "__main__":
     cli.add_argument("--hours", type=int, default=48)
     cli.add_argument("--evaluation-root", type=Path, help="pinned evaluation worktree (defaults to this worktree)")
     cli.add_argument("--recover-prescreen", action="store_true", help="recover expert no-pose exclusions on the frozen run")
+    cli.add_argument("--easy-first", action="store_true", help="finish both Easy cohorts before running Hard")
     dispatch = Dispatch(cli.parse_args())
     try:
         raise SystemExit(dispatch.run())

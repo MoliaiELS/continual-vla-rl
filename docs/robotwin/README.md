@@ -70,4 +70,4 @@ Slurm 超时或中断后，用同一 `-RobotCommit`、阶段和 lane 重新提�
 
 先用 `./tools/xvla/remote.ps1 sync` 生成当前派发器的固定工作树，再运行 `./tools/xvla/remote.ps1 robotwin-run <CuRobo编译JobID> -RobotCommit $c -RobotHours 48`。`$c` 选择已同步的评测提交，可沿用该版本的初态和回合产物。派发仅提交 Slurm 作业，锁和 `dispatch/$c/state.json` 避免重复提交。等校验、GPU 探针与正式环境 smoke 门槛通过后才递交首批。按批汇总并在 Slurm 超时、抢占或节点故障后有限次自动续跑；断点和任务缺口遵守上述分母规则。使用 `robotwin-status` 查当前状态。
 
-当前在跑的正式评测固定为 `9baa17360abe242cb36e8f9c78f0aadbe64b3bee`。若服务器派发器退出，先确认其进程已结束，再用 `./tools/xvla/remote.ps1 robotwin-run 20298 -RobotCommit 9baa17360abe242cb36e8f9c78f0aadbe64b3bee -RobotHours 48 -RecoverPrescreen` 接管现有作业。此选项使后续作业按原日志续筛，只将原生调用栈已确认的空抓取位姿归为专家预筛排除。续跑作业的评测与编排提交记录在 `evidence/prescreen-recovery-jobs.tsv`，已提交 Slurm 作业保留其原配置。
+当前在跑的正式评测固定为 `9baa17360abe242cb36e8f9c78f0aadbe64b3bee`。若服务器派发器退出，先确认其进程已结束，再用 `./tools/xvla/remote.ps1 robotwin-run 20298 -RobotCommit 9baa17360abe242cb36e8f9c78f0aadbe64b3bee -RobotHours 48 -RecoverPrescreen -EasyFirst` 接管现有作业。`-RecoverPrescreen` 使后续作业按原日志续筛，只将原生调用栈已确认的空抓取位姿归为专家预筛排除。续跑作业的评测与编排提交记录在 `evidence/prescreen-recovery-jobs.tsv`。`-EasyFirst` 要求 Easy 首批 5,000 和累计 7,000 回合均通过日志核对，再释放 Hard 的 Slurm 用户挂起。
