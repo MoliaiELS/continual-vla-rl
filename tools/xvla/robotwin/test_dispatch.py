@@ -1,5 +1,8 @@
 """Verify the Easy-first Slurm transition without submitting jobs."""
 
+from pathlib import Path
+from subprocess import CalledProcessError
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -16,6 +19,7 @@ class EasyFirstTest(unittest.TestCase):
         }
         self.runner = object.__new__(dispatch.Dispatch)
         self.runner.state = {"jobs": {"formal:easy": ["20325"], "formal:hard": ["20326"]}}
+        self.runner.pilot_root = None
         self.runner.cfg = SimpleNamespace(hours=48)
         self.runner.save = lambda stage, **values: self.runner.state.update(values)
         self.runner.wait_for = self.wait_for
@@ -61,6 +65,42 @@ class EasyFirstTest(unittest.TestCase):
             ("release", "20326"), ("formal", "hard"), ("extension", "hard"),
             ("formal", "hard"), ("extension", "hard"),
         ])
+
+
+class ResumePilotTest(unittest.TestCase):
+    def setUp(self):
+        root = Path(self.enterContext(TemporaryDirectory()))
+        self.runner = object.__new__(dispatch.Dispatch)
+        self.runner.state = {}
+        self.runner.cfg = SimpleNamespace(partition="GPU")
+        self.runner.pilot_root = root / dispatch.PILOT_COMMIT
+        self.runner.evaluation_root = root / dispatch.RECOVERY_COMMIT
+        self.runner.data = root / "robotwin-b0"
+        self.runner.save = lambda stage, **values: self.runner.state.update(values)
+        self.releases = []
+        self.runner.wait_for_slot_release = self.releases.append
+        self.runner.accounting = lambda job: ("COMPLETED", "0:0")
+        self.enterContext(patch.object(dispatch, "output", return_value=dispatch.PILOT_COMMIT))
+
+    def test_pilot_uses_separate_output_and_waits_for_both_slots(self):
+        with patch.object(dispatch.subprocess, "run", return_value=SimpleNamespace(stdout="ROBOTWIN_JOB_ID=20399")) as launch:
+            self.runner.run_resume_pilot("20325")
+            self.runner.run_resume_pilot("20325")
+        self.assertEqual(self.releases, ["20325", "20399"])
+        self.assertEqual(self.runner.state["easy_pilot_result"],
+                         {"job": "20399", "state": "COMPLETED", "exit_code": "0:0"})
+        launch.assert_called_once()
+        env = launch.call_args.kwargs["env"]
+        self.assertEqual(Path(env["FYP_ROBOTWIN_DATA"]), self.runner.data.with_name("robotwin-native"))
+        self.assertEqual(Path(env["FYP_ROBOTWIN_INPUT_ROOT"]), self.runner.data)
+        self.assertEqual(Path(env["FYP_ROBOTWIN_QUALIFIED_DATA"]), self.runner.data)
+
+    def test_failed_pilot_submission_does_not_hold_formal_resume(self):
+        error = CalledProcessError(1, ["sbatch"], stderr="resource unavailable")
+        with patch.object(dispatch.subprocess, "run", side_effect=error):
+            self.runner.run_resume_pilot("20325")
+        self.assertEqual(self.runner.state["easy_pilot_result"], {"error": "resource unavailable"})
+        self.assertEqual(self.releases, ["20325"])
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ DONE = {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMO
         "BOOT_FAIL", "DEADLINE", "REVOKED"}
 RESUMABLE = {"TIMEOUT", "NODE_FAIL", "PREEMPTED"}
 RECOVERY_COMMIT = "9baa17360abe242cb36e8f9c78f0aadbe64b3bee"
+PILOT_COMMIT = "4acbfabb151ba825c9ea499024af45e945149684"
 
 
 def output(*cmd):
@@ -30,6 +31,7 @@ class Dispatch:
         evaluation_root = evaluation_root.resolve(strict=True)
         recover_prescreen = experiment_config.pop("recover_prescreen", False)
         easy_first = experiment_config.pop("easy_first", False)
+        pilot_root = experiment_config.pop("pilot_root", None)
         self.evaluation_root = evaluation_root
         self.evaluation_tools = evaluation_root / "tools/xvla/robotwin"
         self.data = Path(os.environ["FYP_ROBOTWIN_DATA"])
@@ -46,6 +48,9 @@ class Dispatch:
             raise ValueError("Dispatch arguments differ from existing experiment")
         self.easy_first = easy_first or self.state.get("easy_first", False)
         self.recover_prescreen = recover_prescreen or bool(self.state.get("prescreen_recovery_commit"))
+        self.pilot_root = pilot_root or self.state.get("easy_pilot_root")
+        if self.pilot_root and (not self.easy_first or self.code != RECOVERY_COMMIT or config.gpu != "4090"):
+            raise ValueError("The concurrency pilot requires Easy priority on the original RTX 4090 run")
         if self.recover_prescreen:
             if self.code != RECOVERY_COMMIT:
                 raise ValueError("Prescreen recovery is scoped to the original frozen evaluation")
@@ -112,6 +117,53 @@ class Dispatch:
                     return True
         return False
 
+    @staticmethod
+    def wait_for_slot_release(job):
+        while job in output("squeue", "--me", "-h", "-o", "%i").splitlines():
+            time.sleep(INTERVAL)
+
+    def run_resume_pilot(self, previous_job):
+        if not self.pilot_root or self.state.get("easy_pilot_result"):
+            return
+        self.wait_for_slot_release(previous_job)
+        data = self.data.with_name("robotwin-native")
+        pilot = Path(self.pilot_root)
+        job = self.state.get("easy_pilot_job")
+        if job is None:
+            journal = data / "evidence/jobs.tsv"
+            for row in reversed(journal.read_text().splitlines() if journal.is_file() else []):
+                fields = row.split("\t")
+                if fields[1:] == ["concurrency-pilot", "easy", "4090", PILOT_COMMIT, ""]:
+                    job = fields[0].partition(";")[0]
+                    break
+        if job is None:
+            try:
+                if output("git", "-C", str(pilot), "rev-parse", "HEAD") != PILOT_COMMIT:
+                    raise ValueError("Unexpected concurrency pilot checkout")
+                env = dict(os.environ, FYP_ROBOTWIN_DATA=str(data), FYP_ROBOTWIN_INPUT_ROOT=str(self.data),
+                           FYP_ROBOTWIN_QUALIFIED_DATA=str(self.data))
+                launch = subprocess.run(["bash", str(pilot / "tools/xvla/robotwin/submit.sh"), "concurrency-pilot",
+                                         self.cfg.partition, "4090", "easy", "1", "", str(self.evaluation_root)],
+                                        env=env, check=True, capture_output=True, text=True, timeout=60)
+                match = re.search(r"ROBOTWIN_JOB_ID=(\d+)", launch.stdout)
+                if match is None:
+                    raise ValueError("Pilot submission returned no Slurm job ID")
+                job = match[1]
+            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                self.save("formal", easy_pilot_result={"error": getattr(error, "stderr", None) or str(error)})
+                return
+        queued_since = self.state.get("easy_pilot_queued_since", time.time())
+        self.save("formal", easy_pilot_job=job, easy_pilot_queued_since=queued_since)
+        while True:
+            state, exit_code = self.accounting(job)
+            if state in DONE:
+                self.wait_for_slot_release(job)
+                self.save("formal", easy_pilot_result={"job": job, "state": state, "exit_code": exit_code})
+                return
+            if state == "PENDING" and time.time() - queued_since >= 900:
+                subprocess.run(["scancel", "--state=PENDING", job], timeout=50, check=False)
+            time.sleep(INTERVAL)
+
     def wait_for(self, stage, lanes, hours):
         jobs = {lane: self.start(stage, lane, hours) for lane in lanes}
         retries = {lane: 0 for lane in lanes}
@@ -121,6 +173,8 @@ class Dispatch:
                 if stage not in {"formal", "extension"} or retries[lane] >= 8:
                     continue
                 if state in RESUMABLE or (state == "FAILED" and self.old_prescreen_failed(jobs[lane])):
+                    if stage == "formal" and lane == "easy":
+                        self.run_resume_pilot(jobs[lane])
                     retries[lane] += 1
                     jobs[lane] = self.start(stage, lane, hours, retry=True)
                     states[lane] = ("RESUBMITTED", None)
@@ -235,7 +289,7 @@ class Dispatch:
                                f"{totals['unresolved']} unresolved")
 
     def run_easy_first(self):
-        self.save("formal", easy_first=True)
+        self.save("formal", easy_first=True, easy_pilot_root=str(self.pilot_root) if self.pilot_root else None)
         if not self.state.get("easy_confirmed_complete"):
             self.defer_hard()
             self.wait_for("formal", ("easy",), self.cfg.hours)
@@ -276,6 +330,7 @@ if __name__ == "__main__":
     cli.add_argument("--evaluation-root", type=Path, help="pinned evaluation worktree (defaults to this worktree)")
     cli.add_argument("--recover-prescreen", action="store_true", help="recover verified expert failures on the frozen run")
     cli.add_argument("--easy-first", action="store_true", help="finish both Easy cohorts before running Hard")
+    cli.add_argument("--pilot-root", type=Path, help="fixed native concurrency pilot checkout before Easy resumes")
     dispatch = Dispatch(cli.parse_args())
     try:
         raise SystemExit(dispatch.run())
