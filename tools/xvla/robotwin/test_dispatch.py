@@ -1,6 +1,7 @@
 """Verify the Easy-first Slurm transition without submitting jobs."""
 
 from pathlib import Path
+import json
 from subprocess import CalledProcessError
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -21,6 +22,7 @@ class EasyFirstTest(unittest.TestCase):
         self.runner.state = {"jobs": {"formal:easy": ["20325"], "formal:hard": ["20326"]}}
         self.runner.pilot_root = None
         self.runner.paused_easy_job = None
+        self.runner.parallel_easy = False
         self.runner.cfg = SimpleNamespace(hours=48)
         self.runner.save = lambda stage, **values: self.runner.state.update(values)
         self.runner.wait_for = self.wait_for
@@ -118,6 +120,39 @@ class ResumePilotTest(unittest.TestCase):
             result = self.runner.wait_for("formal", ("easy",), 48)
         self.assertEqual(events, [("pilot", "20325"), ("retry", "easy")])
         self.assertEqual(result, {"easy": ("COMPLETED", "0:0")})
+
+
+class ParallelEasyTest(unittest.TestCase):
+    def setUp(self):
+        root = Path(self.enterContext(TemporaryDirectory()))
+        self.runner = object.__new__(dispatch.Dispatch)
+        self.runner.state = {"jobs": {}, "easy_pilot_result": {"job": "20569", "state": "COMPLETED", "exit_code": "0:0"}}
+        self.runner.cfg = SimpleNamespace(partition="GPU", gpu="4090")
+        self.runner.code = dispatch.RECOVERY_COMMIT
+        self.runner.easy_first = self.runner.recover_prescreen = self.runner.parallel_easy = True
+        self.runner.data = root / "robotwin-b0"
+        self.runner.evaluation_root = root / dispatch.RECOVERY_COMMIT
+        self.runner.evaluation_tools = self.runner.evaluation_root / "tools/xvla/robotwin"
+        self.runner.save = lambda stage, **values: self.runner.state.update(values)
+        self.summary = root / "robotwin-native/jobs/20569/concurrency-pilot/summary.json"
+        self.summary.parent.mkdir(parents=True)
+
+    def test_parallel_submission_only_for_easy(self):
+        with patch.object(dispatch, "output", return_value="ROBOTWIN_JOB_ID=20573") as call:
+            self.runner.start("formal", "easy", 48)
+            self.runner.start("formal", "hard", 48)
+        self.assertEqual(call.call_args_list[0].args[-3:], ("", str(self.runner.evaluation_root), "2"))
+        self.assertEqual(call.call_args_list[1].args[-2:], ("", str(self.runner.evaluation_root)))
+
+    def test_rejects_a_pilot_with_changed_outcomes(self):
+        pilot = dict(job_id="20569", evaluation_commit=dispatch.RECOVERY_COMMIT, complete=True,
+                     outcome_changes=[], serial_over_concurrent=1.4158)
+        self.summary.write_text(json.dumps(pilot))
+        self.runner.qualify_parallel_easy()
+        pilot["outcome_changes"] = ["different-seed-outcome"]
+        self.summary.write_text(json.dumps(pilot))
+        with self.assertRaisesRegex(ValueError, "did not qualify"):
+            self.runner.qualify_parallel_easy()
 
 
 if __name__ == "__main__":

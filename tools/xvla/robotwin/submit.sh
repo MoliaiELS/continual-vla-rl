@@ -3,6 +3,19 @@ set -euo pipefail
 tool_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mode="${1:?mode}" partition="${2:?partition}" gpu="${3:?gpu}" lane="${4:?lane}" hours="${5:?hours}" task="${6:-}"
 evaluation_root="${7:-}"
+eval_workers="${8:-1}"
+cpus=8
+case "$eval_workers" in
+    1) ;;
+    2)
+        if [[ -z "$evaluation_root" || "$lane" != easy || "$gpu" != 4090 ]]; then
+            echo 'Two eval workers require the frozen Easy recovery and one RTX 4090' >&2
+            exit 1
+        fi
+        cpus=16
+        ;;
+    *) echo 'Expected one or two eval workers' >&2; exit 1 ;;
+esac
 orchestration_commit="$(git -C "$tool_dir" rev-parse HEAD)"
 evaluation_commit="$orchestration_commit"
 evaluation_tools="$tool_dir"
@@ -50,14 +63,18 @@ if [[ "$mode" != build ]]; then
     if [[ -n "$evaluation_root" ]]; then job_args+=(--pinned-evaluation-root "$evaluation_root"); fi
     job_args+=(--lane "$lane")
     if [[ -n "$task" ]]; then job_args+=(--task "$task"); fi
+    if [[ "$eval_workers" == 2 ]]; then job_args+=(--eval-workers 2); fi
 fi
 printf -v launch '%q ' bash "$tool_dir/job.sh" "${job_args[@]}"
 jobid="$(sbatch --parsable --partition="$partition" --exclude=4090node1 --nodes=1 --ntasks=1 \
-    --cpus-per-task=8 --time="$((10#$hours * 60))" "${gres[@]}" \
+    --cpus-per-task="$cpus" --time="$((10#$hours * 60))" "${gres[@]}" \
     --job-name="rw-b0-$mode-$lane" --output="$data/logs/%j.out" --error="$data/logs/%j.err" \
     --export=ALL --wrap="$launch")"
 if [[ -n "$evaluation_root" ]]; then
     printf '%s\t%s\t%s\n' "${jobid%%;*}" "$evaluation_commit" "$orchestration_commit" >> "$data/evidence/prescreen-recovery-jobs.tsv"
+fi
+if [[ "$eval_workers" == 2 ]]; then
+    printf '%s\t%s\t%s\t%s\n' "${jobid%%;*}" "$evaluation_commit" "$orchestration_commit" "$eval_workers" >> "$data/evidence/parallel-eval-jobs.tsv"
 fi
 printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$jobid" "$mode" "$lane" "$gpu" "$evaluation_commit" "$task" >> "$data/evidence/jobs.tsv"
 echo "ROBOTWIN_JOB_ID=$jobid"

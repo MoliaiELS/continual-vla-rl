@@ -33,6 +33,7 @@ class Dispatch:
         easy_first = experiment_config.pop("easy_first", False)
         pilot_root = experiment_config.pop("pilot_root", None)
         paused_easy_job = experiment_config.pop("paused_easy_job", None)
+        parallel_easy = experiment_config.pop("parallel_easy", False)
         self.evaluation_root = evaluation_root
         self.evaluation_tools = evaluation_root / "tools/xvla/robotwin"
         self.data = Path(os.environ["FYP_ROBOTWIN_DATA"])
@@ -51,6 +52,7 @@ class Dispatch:
         self.recover_prescreen = recover_prescreen or bool(self.state.get("prescreen_recovery_commit"))
         self.pilot_root = pilot_root or self.state.get("easy_pilot_root")
         self.paused_easy_job = paused_easy_job or self.state.get("paused_easy_job")
+        self.parallel_easy = parallel_easy or self.state.get("parallel_easy", False)
         if self.pilot_root and (not self.easy_first or self.code != RECOVERY_COMMIT or config.gpu != "4090"):
             raise ValueError("The concurrency pilot requires Easy priority on the original RTX 4090 run")
         if paused_easy_job and (not self.pilot_root or not self.recover_prescreen
@@ -60,6 +62,20 @@ class Dispatch:
             if self.code != RECOVERY_COMMIT:
                 raise ValueError("Prescreen recovery is scoped to the original frozen evaluation")
             self.state["prescreen_recovery_commit"] = output("git", "-C", str(HERE), "rev-parse", "HEAD")
+        if self.parallel_easy:
+            self.qualify_parallel_easy()
+
+    def qualify_parallel_easy(self):
+        pilot = self.state.get("easy_pilot_result") or {}
+        if not (self.easy_first and self.recover_prescreen and self.cfg.gpu == "4090"
+                and pilot.get("state") == "COMPLETED" and pilot.get("exit_code") == "0:0"):
+            raise ValueError("Parallel Easy requires a completed RTX 4090 pilot and Easy-first recovery")
+        path = self.data.with_name("robotwin-native") / "jobs" / pilot["job"] / "concurrency-pilot/summary.json"
+        summary = json.loads(path.read_text())
+        if (summary.get("job_id") != pilot["job"] or summary.get("evaluation_commit") != self.code
+                or summary.get("complete") is not True or summary.get("outcome_changes") != []
+                or summary.get("serial_over_concurrent", 0) <= 1):
+            raise ValueError("The frozen concurrency pilot did not qualify Easy parallel evaluation")
 
     def save(self, stage, **extra):
         self.state.update(stage=stage, at_unix=time.time(), **extra)
@@ -100,6 +116,8 @@ class Dispatch:
             if self.recover_prescreen and stage in {"formal", "extension"}:
                 submit = HERE / "submit.sh"
                 extra = ("", str(self.evaluation_root))
+                if self.parallel_easy and lane == "easy":
+                    extra += ("2",)
             msg = output("bash", str(submit), stage, self.cfg.partition, self.cfg.gpu, lane, str(hours), *extra)
             job = re.search(r"ROBOTWIN_JOB_ID=(\d+)", msg)[1]
         jobs.append(job)
@@ -180,6 +198,7 @@ class Dispatch:
                 paused_easy = (stage == "formal" and lane == "easy" and state == "CANCELLED"
                                and jobs[lane] == self.paused_easy_job)
                 if state in RESUMABLE or paused_easy or (state == "FAILED" and self.old_prescreen_failed(jobs[lane])):
+                    self.wait_for_slot_release(jobs[lane])
                     if stage == "formal" and lane == "easy":
                         self.run_resume_pilot(jobs[lane])
                     retries[lane] += 1
@@ -297,7 +316,7 @@ class Dispatch:
 
     def run_easy_first(self):
         self.save("formal", easy_first=True, easy_pilot_root=str(self.pilot_root) if self.pilot_root else None,
-                  paused_easy_job=self.paused_easy_job)
+                  paused_easy_job=self.paused_easy_job, parallel_easy=self.parallel_easy)
         if not self.state.get("easy_confirmed_complete"):
             self.defer_hard()
             self.wait_for("formal", ("easy",), self.cfg.hours)
@@ -340,6 +359,7 @@ if __name__ == "__main__":
     cli.add_argument("--easy-first", action="store_true", help="finish both Easy cohorts before running Hard")
     cli.add_argument("--pilot-root", type=Path, help="fixed native concurrency pilot checkout before Easy resumes")
     cli.add_argument("--paused-easy-job", help="operator-paused Easy job eligible for replacement after the pilot")
+    cli.add_argument("--parallel-easy", action="store_true", help="use two evaluation workers after the successful pilot")
     dispatch = Dispatch(cli.parse_args())
     try:
         raise SystemExit(dispatch.run())

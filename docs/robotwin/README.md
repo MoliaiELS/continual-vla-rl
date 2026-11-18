@@ -73,3 +73,5 @@ Slurm 超时或中断后，用同一 `-RobotCommit`、阶段和 lane 重新提�
 当前在跑的正式评测固定为 `9baa17360abe242cb36e8f9c78f0aadbe64b3bee`。若服务器派发器退出，先确认其进程已结束，再用 `./tools/xvla/remote.ps1 robotwin-run 20298 -RobotCommit 9baa17360abe242cb36e8f9c78f0aadbe64b3bee -RobotHours 48 -RecoverPrescreen -EasyFirst` 接管现有作业。`-RecoverPrescreen` 使后续作业按原日志续筛。空抓取位姿，以及倒垃圾任务在专家规划失败后读取空动作列表的情况，均需经固定版调用栈核实，才会记为专家预筛排除。续跑作业的评测与编排提交记录在 `evidence/prescreen-recovery-jobs.tsv`。`-EasyFirst` 要求 Easy 首批 5,000 和累计 7,000 回合均通过日志核对，再释放 Hard 的 Slurm 用户挂起。
 
 `-PilotRoot` 可指定含并发短测入口的固定 `RLinf-VLA` 工作树。首次 Easy 正式续跑前，派发器等待上一作业释放名额，再在同一冻结评测环境中提交一次独立短测。短测若排队 15 分钟仍未开始，派发器撤回该短测并接续 Easy。短测结果保存在 `robotwin-native/jobs/<jobid>/concurrency-pilot/`，正式 Easy 续跑维持串行执行。
+
+通过同一固定提交的并发短测后，可用 `-ParallelEasy` 在续跑时启用单卡双进程。专家预筛保持串行，每对就绪任务分别使用独立评测进程和日志。每个作业仍使用获配的一张 RTX 4090，申请 16 个 CPU，并记录评测提交、编排提交和任务实际并发数。若按计划在任务边界停止当前 Easy，应通过 `-PausedEasyJobId` 指定该作业编号，派发器会从原始日志接续。
