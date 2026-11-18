@@ -274,7 +274,7 @@ if __name__ == "__main__":
     cli.add_argument("--gpu", choices=("4090", "3090"), default="4090")
     cli.add_argument("--hours", type=int, default=48)
     cli.add_argument("--evaluation-root", type=Path, help="pinned evaluation worktree (defaults to this worktree)")
-    cli.add_argument("--recover-prescreen", action="store_true", help="recover expert no-pose exclusions on the frozen run")
+    cli.add_argument("--recover-prescreen", action="store_true", help="recover verified expert failures on the frozen run")
     cli.add_argument("--easy-first", action="store_true", help="finish both Easy cohorts before running Hard")
     dispatch = Dispatch(cli.parse_args())
     try:

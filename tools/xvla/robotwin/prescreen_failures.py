@@ -6,6 +6,14 @@ from traceback import walk_tb
 
 
 EXPERT_GRASP_POSE_UNAVAILABLE = "expert_grasp_pose_unavailable"
+EXPERT_PLAN_FAILED_EMPTY_GRASP = "expert_plan_failed_empty_grasp"
+
+_EMPTY_GRASP_SITES = {
+    ("right_action = self.grasp_actor(bottle, arm_tag=arm_tag, pre_grasp_dis=0.1)",
+     "right_action[1][0].target_pose[2] += delta_dis"): "right_action",
+    ('left_action = self.grasp_actor(bottle, arm_tag="left", pre_grasp_dis=0.1)',
+     "left_action[1][0].target_pose[2] -= delta_dis"): "left_action",
+}
 
 
 def _at(frame, path, function):
@@ -13,7 +21,7 @@ def _at(frame, path, function):
 
 
 def expert_failure_reason(env, task, error):
-    """Classify only confirmed no-pose exceptions from the pinned expert's play_once."""
+    """Classify only confirmed grasp failures from the pinned expert's play_once."""
     frames = list(walk_tb(error.__traceback__))
     if not frames:
         return None
@@ -35,4 +43,16 @@ def expert_failure_reason(env, task, error):
         source = linecache.getline(tail.f_code.co_filename, lineno, tail.f_globals)
         if "self.get_grasp_pose(self.alarm, pre_dis=0.1, contact_point_id=0, arm_tag=arm_tag)[:3]" in source:
             return EXPERT_GRASP_POSE_UNAVAILABLE
+    if (task == "put_bottles_dustbin" and isinstance(error, IndexError)
+            and str(error) == "list index out of range"
+            and _at(tail, ("envs", "put_bottles_dustbin.py"), "play_once")
+            and tail.f_locals.get("self") is env and getattr(env, "plan_success", None) is False):
+        filename = tail.f_code.co_filename
+        call = linecache.getline(filename, lineno - 1, tail.f_globals).strip()
+        source = linecache.getline(filename, lineno, tail.f_globals).strip()
+        action_name = _EMPTY_GRASP_SITES.get((call, source))
+        action = tail.f_locals.get(action_name)
+        if (type(action) is tuple and len(action) == 2 and action[0] is None
+                and type(action[1]) is list and not action[1]):
+            return EXPERT_PLAN_FAILED_EMPTY_GRASP
     return None
