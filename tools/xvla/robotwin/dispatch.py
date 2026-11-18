@@ -32,6 +32,7 @@ class Dispatch:
         recover_prescreen = experiment_config.pop("recover_prescreen", False)
         easy_first = experiment_config.pop("easy_first", False)
         pilot_root = experiment_config.pop("pilot_root", None)
+        paused_easy_job = experiment_config.pop("paused_easy_job", None)
         self.evaluation_root = evaluation_root
         self.evaluation_tools = evaluation_root / "tools/xvla/robotwin"
         self.data = Path(os.environ["FYP_ROBOTWIN_DATA"])
@@ -49,8 +50,12 @@ class Dispatch:
         self.easy_first = easy_first or self.state.get("easy_first", False)
         self.recover_prescreen = recover_prescreen or bool(self.state.get("prescreen_recovery_commit"))
         self.pilot_root = pilot_root or self.state.get("easy_pilot_root")
+        self.paused_easy_job = paused_easy_job or self.state.get("paused_easy_job")
         if self.pilot_root and (not self.easy_first or self.code != RECOVERY_COMMIT or config.gpu != "4090"):
             raise ValueError("The concurrency pilot requires Easy priority on the original RTX 4090 run")
+        if paused_easy_job and (not self.pilot_root or not self.recover_prescreen
+                               or self.state["jobs"].get("formal:easy", [None])[-1] != paused_easy_job):
+            raise ValueError("Pause replacement must name the current Easy job and use the frozen pilot and recovery")
         if self.recover_prescreen:
             if self.code != RECOVERY_COMMIT:
                 raise ValueError("Prescreen recovery is scoped to the original frozen evaluation")
@@ -172,7 +177,9 @@ class Dispatch:
             for lane, (state, _) in states.items():
                 if stage not in {"formal", "extension"} or retries[lane] >= 8:
                     continue
-                if state in RESUMABLE or (state == "FAILED" and self.old_prescreen_failed(jobs[lane])):
+                paused_easy = (stage == "formal" and lane == "easy" and state == "CANCELLED"
+                               and jobs[lane] == self.paused_easy_job)
+                if state in RESUMABLE or paused_easy or (state == "FAILED" and self.old_prescreen_failed(jobs[lane])):
                     if stage == "formal" and lane == "easy":
                         self.run_resume_pilot(jobs[lane])
                     retries[lane] += 1
@@ -289,7 +296,8 @@ class Dispatch:
                                f"{totals['unresolved']} unresolved")
 
     def run_easy_first(self):
-        self.save("formal", easy_first=True, easy_pilot_root=str(self.pilot_root) if self.pilot_root else None)
+        self.save("formal", easy_first=True, easy_pilot_root=str(self.pilot_root) if self.pilot_root else None,
+                  paused_easy_job=self.paused_easy_job)
         if not self.state.get("easy_confirmed_complete"):
             self.defer_hard()
             self.wait_for("formal", ("easy",), self.cfg.hours)
@@ -331,6 +339,7 @@ if __name__ == "__main__":
     cli.add_argument("--recover-prescreen", action="store_true", help="recover verified expert failures on the frozen run")
     cli.add_argument("--easy-first", action="store_true", help="finish both Easy cohorts before running Hard")
     cli.add_argument("--pilot-root", type=Path, help="fixed native concurrency pilot checkout before Easy resumes")
+    cli.add_argument("--paused-easy-job", help="operator-paused Easy job eligible for replacement after the pilot")
     dispatch = Dispatch(cli.parse_args())
     try:
         raise SystemExit(dispatch.run())

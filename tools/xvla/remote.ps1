@@ -23,6 +23,7 @@ param(
     [switch]$RecoverPrescreen,
     [switch]$EasyFirst,
     [ValidatePattern('^(/[A-Za-z0-9_.-]+)+$')][string]$PilotRoot,
+    [ValidatePattern('^[0-9]+$')][string]$PausedEasyJobId,
     [switch]$RootOnly,
     [ValidateSet('reference','expanded','stratified')][string]$ResetPool
 )
@@ -61,11 +62,12 @@ switch ($Command) {
   $priorityArg=if ($EasyFirst) { '--easy-first' } else { '' }
   if ($PilotRoot -match '/\.\.?(/|$)') { throw 'Use a resolved fixed worktree for -PilotRoot' }
   $pilotArg=if ($PilotRoot) { "--pilot-root '$PilotRoot'" } else { '' }
+  $pauseArg=if ($PausedEasyJobId) { "--paused-easy-job '$PausedEasyJobId'" } else { '' }
   Invoke-XRemote @"
 test -f '$snapshot/tools/xvla/robotwin/dispatch.py'
 test "`$(git -C '$robotSnapshot' rev-parse HEAD)" = '$robotSha'
 mkdir -p '$robotData/dispatch/$robotSha'
-nohup flock -n '$robotData/dispatch.lock' '$($settings.CondaRoot)/envs/vla_budget_rl/bin/python' -u '$snapshot/tools/xvla/robotwin/dispatch.py' --evaluation-root '$robotSnapshot' --build-job '$Value' --partition '$($settings.Partition)' --gpu '$GpuModel' --hours '$RobotHours' $recoveryArg $priorityArg $pilotArg >> '$robotData/dispatch/$robotSha/dispatch.log' 2>&1 < /dev/null &
+nohup flock -n '$robotData/dispatch.lock' '$($settings.CondaRoot)/envs/vla_budget_rl/bin/python' -u '$snapshot/tools/xvla/robotwin/dispatch.py' --evaluation-root '$robotSnapshot' --build-job '$Value' --partition '$($settings.Partition)' --gpu '$GpuModel' --hours '$RobotHours' $recoveryArg $priorityArg $pilotArg $pauseArg >> '$robotData/dispatch/$robotSha/dispatch.log' 2>&1 < /dev/null &
 echo ROBOTWIN_DISPATCH_PID=`$!
 "@
  }

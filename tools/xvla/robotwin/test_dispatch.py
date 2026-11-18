@@ -20,6 +20,7 @@ class EasyFirstTest(unittest.TestCase):
         self.runner = object.__new__(dispatch.Dispatch)
         self.runner.state = {"jobs": {"formal:easy": ["20325"], "formal:hard": ["20326"]}}
         self.runner.pilot_root = None
+        self.runner.paused_easy_job = None
         self.runner.cfg = SimpleNamespace(hours=48)
         self.runner.save = lambda stage, **values: self.runner.state.update(values)
         self.runner.wait_for = self.wait_for
@@ -101,6 +102,22 @@ class ResumePilotTest(unittest.TestCase):
             self.runner.run_resume_pilot("20325")
         self.assertEqual(self.runner.state["easy_pilot_result"], {"error": "resource unavailable"})
         self.assertEqual(self.releases, ["20325"])
+
+    def test_planned_cancel_runs_pilot_before_replacement(self):
+        events = []
+        self.runner.paused_easy_job = "20325"
+        self.runner.accounting = lambda job: ("CANCELLED", "0:0") if job == "20325" else ("COMPLETED", "0:0")
+        self.runner.run_resume_pilot = lambda job: events.append(("pilot", job))
+        def start(stage, lane, hours, retry=False):
+            if retry:
+                events.append(("retry", lane))
+                return "20400"
+            return "20325"
+        self.runner.start = start
+        with patch.object(dispatch.time, "sleep"):
+            result = self.runner.wait_for("formal", ("easy",), 48)
+        self.assertEqual(events, [("pilot", "20325"), ("retry", "easy")])
+        self.assertEqual(result, {"easy": ("COMPLETED", "0:0")})
 
 
 if __name__ == "__main__":
