@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -168,11 +169,12 @@ class NativeBudgetDispatch:
                 self.save("submitting", native_submission=intent)
                 logs = self.data / "logs"
                 logs.mkdir(exist_ok=True)
+                command = shlex.join(["bash", str(HERE / "native_budget_job.sh"), str(self.evaluation), str(self.root)])
                 launch = output("sbatch", "--parsable", f"--partition={self.cfg.partition}", "--exclude=4090node1",
                                 "--nodes=1", "--ntasks=1", "--cpus-per-task=16", "--gres=gpu:4090:1",
                                 f"--time={self.cfg.hours * 60}", "--job-name=rw-native-budget-easy",
                                 f"--comment={token}", f"--output={logs}/%j.out", f"--error={logs}/%j.err",
-                                "--export=ALL", str(HERE / "native_budget_job.sh"), str(self.evaluation), str(self.root))
+                                "--export=ALL", f"--wrap={command}")
                 job = launch.partition(";")[0]
                 require(job.isdigit(), f"Unexpected sbatch response: {launch}")
         self.append_native_job(job, intent["token"])
