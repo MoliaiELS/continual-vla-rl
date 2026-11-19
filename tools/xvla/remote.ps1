@@ -25,6 +25,8 @@ param(
     [ValidatePattern('^(/[A-Za-z0-9_.-]+)+$')][string]$PilotRoot,
     [ValidatePattern('^[0-9]+$')][string]$PausedEasyJobId,
     [switch]$ParallelEasy,
+    [switch]$NativeBudget,
+    [ValidatePattern('^[0-9a-f]{40}$')][string]$NativeBudgetCommit,
     [switch]$RootOnly,
     [ValidateSet('reference','expanded','stratified')][string]$ResetPool
 )
@@ -55,10 +57,24 @@ $sha=(& git -C $repoRoot rev-parse HEAD).Trim()
 $snapshot="$($settings.RunCodeRoot)/$sha"
 $robotSha=$sha
 if ($RobotCommit) { $robotSha=$RobotCommit }
+if ($NativeBudget -and -not $RobotCommit) { $robotSha='9baa17360abe242cb36e8f9c78f0aadbe64b3bee' }
 $robotSnapshot="$($settings.RunCodeRoot)/$robotSha"
+$nativeSha=if ($NativeBudgetCommit) { $NativeBudgetCommit } else { $sha }
+$nativeSnapshot="$($settings.RunCodeRoot)/$nativeSha"
+$nativeOutput="$robotData/native-budget/$nativeSha"
 switch ($Command) {
  'robotwin-run' {
   if ($Value -notmatch '^[0-9]+$') { throw 'Requires the CuRobo Slurm build job ID' }
+  if ($NativeBudget) {
+   Invoke-XRemote @"
+test -f '$nativeSnapshot/tools/xvla/robotwin/native_budget_dispatch.py'
+source '$robotSnapshot/tools/xvla/robotwin/runtime.env'
+'$robotPrefix/bin/python' '$nativeSnapshot/tools/xvla/robotwin/native_budget.py' --prepare-only --pinned-evaluation-root '$robotSnapshot' --input-panel '$robotData/panels/$robotSha' --output-root '$nativeOutput' --robotwin-root '$robotCode/RoboTwin-'"`$ROBOTWIN_REV" --xvla-root '$robotCode/X-VLA-'"`$XVLA_REV" --checkpoint '$robotData/models/X-VLA-RoboTwin2--'"`${MODEL_REV:0:12}"
+'$robotPrefix/bin/python' '$nativeSnapshot/tools/xvla/robotwin/native_budget_report.py' --input '$nativeOutput' --source-panel '$robotData/panels/$robotSha' --output '$nativeOutput/reports'
+nohup '$($settings.CondaRoot)/envs/vla_budget_rl/bin/python' -u '$nativeSnapshot/tools/xvla/robotwin/native_budget_dispatch.py' --evaluation-root '$robotSnapshot' --output-root '$nativeOutput' --build-job '$Value' --partition '$($settings.Partition)' --gpu '$GpuModel' --hours '$RobotHours' >> '$nativeOutput/dispatch.log' 2>&1 < /dev/null &
+echo ROBOTWIN_NATIVE_BUDGET_DISPATCH_PID=`$!
+"@
+  } else {
   $recoveryArg=if ($RecoverPrescreen) { '--recover-prescreen' } else { '' }
   $priorityArg=if ($EasyFirst) { '--easy-first' } else { '' }
   if ($PilotRoot -match '/\.\.?(/|$)') { throw 'Use a resolved fixed worktree for -PilotRoot' }
@@ -72,6 +88,7 @@ mkdir -p '$robotData/dispatch/$robotSha'
 nohup flock -n '$robotData/dispatch.lock' '$($settings.CondaRoot)/envs/vla_budget_rl/bin/python' -u '$snapshot/tools/xvla/robotwin/dispatch.py' --evaluation-root '$robotSnapshot' --build-job '$Value' --partition '$($settings.Partition)' --gpu '$GpuModel' --hours '$RobotHours' $recoveryArg $priorityArg $pilotArg $pauseArg $parallelArg >> '$robotData/dispatch/$robotSha/dispatch.log' 2>&1 < /dev/null &
 echo ROBOTWIN_DISPATCH_PID=`$!
 "@
+  }
  }
  'robotwin-submit' {
   if ($Value -notin @('build','probe','smoke','coverage','formal','extension')) { throw 'Requires build, probe, smoke, coverage, formal, or extension' }
@@ -82,9 +99,14 @@ bash '$robotSnapshot/tools/xvla/robotwin/submit.sh' '$Value' '$($settings.Partit
  }
  'robotwin-report' {
   if ($Value -notin @('smoke','formal')) { throw 'Requires smoke or formal' }
+  if ($NativeBudget) {
+   if ($Value -ne 'formal') { throw 'Native-budget reevaluation uses the formal cohort' }
+   Invoke-XRemote "'$robotPrefix/bin/python' '$nativeSnapshot/tools/xvla/robotwin/native_budget_report.py' --input '$nativeOutput' --source-panel '$robotData/panels/$robotSha' --output '$nativeOutput/reports'"
+  } else {
   Invoke-XRemote @"
 '$($settings.CondaRoot)/envs/vla_budget_rl/bin/python' '$robotSnapshot/tools/xvla/robotwin/summarize.py' --input '$robotData/panels/$robotSha' --output '$robotData/reports/$robotSha/$Value' --phase '$Value'
 "@
+  }
  }
  'robotwin-prepare' {
   if ($Value -notin @('env','assets','link')) { throw 'Requires env, assets, or link' }
@@ -116,6 +138,26 @@ if [[ -f "$FYP_ROBOTWIN_DATA/evidence/jobs.tsv" ]]; then echo '--- submitted job
 for record in "$FYP_ROBOTWIN_DATA"/dispatch/*/dispatch.log; do
   if [[ -f "$record" ]]; then echo "--- $(dirname "$record")"; tail -n 4 "$record"; fi
 done
+python3 - "$FYP_ROBOTWIN_DATA" <<'PY'
+import json,sys
+from pathlib import Path
+for profile in sorted((Path(sys.argv[1])/'native-budget').glob('*/profile.json')):
+    root=profile.parent
+    state=json.loads((root/'state.json').read_text()) if (root/'state.json').is_file() else {}
+    print('--- native-budget',root.name,'stage',state.get('stage','prepared'))
+    report=root/'reports/summary.json'
+    if report.is_file():
+        summary=json.loads(report.read_text())
+        total=summary['overall']['cumulative']
+        print('native-budget Easy',str(total['finished'])+'/'+str(total['planned']),'completed,',total['unresolved'],'unresolved')
+        for task in summary['tasks']:
+            first=task['batches']['1']
+            rate=first['success_rate']
+            print(task['task_id'],str(first['finished'])+'/100,',first['successes'],'successes,',str(round(rate*100,2))+'%' if rate is not None else 'pending')
+    log=root/'dispatch.log'
+    if log.is_file():
+        print('\n'.join(log.read_text().splitlines()[-2:]))
+PY
 for log in "$FYP_ROBOTWIN_DATA"/logs/{prepare-*,download-robotwin}.log; do
   if [[ -f "$log" ]]; then echo "--- ${log##*/}"; tail -n 4 "$log"; fi
 done
