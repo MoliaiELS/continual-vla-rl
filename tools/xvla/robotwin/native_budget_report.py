@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
 
@@ -312,12 +313,13 @@ def main():
             and not output.is_relative_to(args.input.resolve() / "formal"), output, "report output must be outside the raw episode directories")
     report = summarize(args.input, args.source_panel)
     output.mkdir(parents=True, exist_ok=True)
-    temporary = output / "summary.json.tmp"
+    temporary = output / f".summary-{os.getpid()}.json.tmp"
     temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     temporary.replace(output / "summary.json")
-    with (output / "report.md.tmp").open("w", encoding="utf-8") as stream:
+    markdown_temporary = output / f".report-{os.getpid()}.md.tmp"
+    with markdown_temporary.open("w", encoding="utf-8") as stream:
         emit_markdown(report, stream)
-    (output / "report.md.tmp").replace(output / "report.md")
+    markdown_temporary.replace(output / "report.md")
     data = report["overall"]["cumulative"]
     print(f"Native-budget Easy: {data['finished']}/{data['planned']} completed, {data['successes']} successes, {data['unresolved']} unresolved")
 

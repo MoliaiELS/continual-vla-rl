@@ -24,7 +24,7 @@ Easy 首批共 500 回合，微波炉和闹钟按原定重点任务计划再各�
 
 首次启动 `20729` 在执行前的 Git 路径检查失败，原因是 Slurm 复制了直接提交的批处理脚本。已改为从固定工作树用 `bash` 启动，失败作业和 0/900 初始清单保留，原 profile 标注由当前 profile 替代。
 
-在本机查询及刷新汇总。
+在本机查询实时汇总。作业会自动保存 `reports` 目录中的文件。
 
 ```powershell
 ./tools/xvla/remote.ps1 robotwin-status

@@ -101,7 +101,16 @@ bash '$robotSnapshot/tools/xvla/robotwin/submit.sh' '$Value' '$($settings.Partit
   if ($Value -notin @('smoke','formal')) { throw 'Requires smoke or formal' }
   if ($NativeBudget) {
    if ($Value -ne 'formal') { throw 'Native-budget reevaluation uses the formal cohort' }
-   Invoke-XRemote "'$robotPrefix/bin/python' '$nativeSnapshot/tools/xvla/robotwin/native_budget_report.py' --input '$nativeOutput' --source-panel '$robotData/panels/$robotSha' --output '$nativeOutput/reports'"
+   Invoke-XRemote @"
+'$robotPrefix/bin/python' - <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, '$nativeSnapshot/tools/xvla/robotwin')
+import native_budget_report
+report=native_budget_report.summarize(Path('$nativeOutput'),Path('$robotData/panels/$robotSha'))
+native_budget_report.emit_markdown(report,sys.stdout)
+PY
+"@
   } else {
   Invoke-XRemote @"
 '$($settings.CondaRoot)/envs/vla_budget_rl/bin/python' '$robotSnapshot/tools/xvla/robotwin/summarize.py' --input '$robotData/panels/$robotSha' --output '$robotData/reports/$robotSha/$Value' --phase '$Value'
