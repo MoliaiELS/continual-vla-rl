@@ -141,10 +141,13 @@ done
 python3 - "$FYP_ROBOTWIN_DATA" <<'PY'
 import json,sys
 from pathlib import Path
-for profile in sorted((Path(sys.argv[1])/'native-budget').glob('*/profile.json')):
+for profile in sorted((Path(sys.argv[1])/'native-budget').glob('*/profile.json'),key=lambda path:path.stat().st_mtime):
     root=profile.parent
     state=json.loads((root/'state.json').read_text()) if (root/'state.json').is_file() else {}
     print('--- native-budget',root.name,'stage',state.get('stage','prepared'))
+    if state.get('superseded_by'):
+        print('superseded by',state['superseded_by'])
+        continue
     report=root/'reports/summary.json'
     if report.is_file():
         summary=json.loads(report.read_text())
