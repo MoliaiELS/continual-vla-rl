@@ -56,7 +56,7 @@ def task_state(env, task):
     state["tcp_pose"] = {key: np.asarray(value).tolist() for key, value in state["tcp_pose"].items()}
     if task == "open_microwave":
         qpos, limits = env.microwave.get_qpos(), env.microwave.get_qlimits()
-        state.update(model_id=int(env.model_id), qpos=np.asarray(qpos).tolist(), qlimits=np.asarray(limits).tolist(),
+        state.update(model_id=int(env.model_id), qpos=np.asarray(qpos).tolist(), first_joint_limits=np.asarray(limits[0]).tolist(),
                      native_target_fraction=0.6, target_qpos=float(limits[0][1] * 0.6),
                      remaining_qpos=float(limits[0][1] * 0.6 - qpos[0]),
                      predicate_operands_pass=bool(qpos[0] >= limits[0][1] * 0.6))
