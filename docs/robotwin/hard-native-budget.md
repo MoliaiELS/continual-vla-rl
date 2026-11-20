@@ -1,6 +1,6 @@
 # Hard 全任务原生动作预算评测
 
-最新状态：2026-11-20 按用户要求暂停 Hard，为另一对话的 PPO／GRPO 算法短测留出后续时段。CPU 接续控制器 `2319597` 已停止，状态为 `user_paused`；Easy 当前 GPU 作业 `20730` 继续跑完，之后不自动提交原 Easy 续跑或 Hard。旧 Hard `20326` 继续保持 `JobHeldUser`，不占 GPU；Easy 结束后，另一对话可提交短测。正式 Hard 仍为 0/7,000，初态计划和已准备文件保留。`pause.json` 与 `state.before-user-pause-20261120.json` 记录暂停原因和原状态，须用户明确恢复后再接续。
+最新状态：2026-11-20 22:51 原生预算 Hard **20965** 已提交并保持 `JobHeldUser`，不占 GPU。PPO／GRPO 的 agent 完成全部短测后执行 `scontrol release 20965`，即可由 Slurm 调度启动。旧 300 动作 Hard 占位 `20326` 已取消；旧 CPU 接续控制器保持停止。正式 Hard 仍为 0/7,000，原计划及输出目录保留。此前的 `pause.json`、状态备份与新的 `direct_handoff.json` 分别记录暂停和本次接续。
 
 随后用户确认可提前提交新 Hard，并由 PPO agent 在短测完成后启动。Easy `20730` 已于 22:20 完成全部 900 回合。新的提交与释放流程见 [PPO／GRPO 之后启动 Hard](hard-after-ppo.md)：只提交原生预算 Hard，替换旧占位作业并保持挂起；原 Easy 300 动作扩测剩余 791 回合明确暂缓。旧接续控制器及下方历史恢复命令不用于这次直达 Hard。
 
