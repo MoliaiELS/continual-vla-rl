@@ -152,8 +152,9 @@ class Submit:
                 and fields.get("UserId", "").endswith(f"({os.getuid()})") and fields.get("Comment") == token
                 and fields.get("NumCPUs") == "16" and fields.get("NumNodes") in {"1", "1-1"}
                 and fields.get("TimeLimit") == "2-00:00:00"
-                and ("gpu:4090:1" in fields.get("TresPerNode", "")
-                     or "gres/gpu:4090=1" in fields.get("ReqTRES", "")), "Unexpected native Hard job resources or token")
+                and (re.fullmatch(r"gres[/:]gpu:4090:1(?:\([^)]*\))?", fields.get("TresPerNode", ""))
+                     or ({item for item in fields.get("ReqTRES", "").split(",") if item.startswith("gres/gpu")}
+                         == {"gres/gpu=1", "gres/gpu:4090=1"})), "Unexpected native Hard job resources or token")
         batch = output("scontrol", "write", "batch_script", job, "-")
         require(str(self.worker / "tools/xvla/robotwin/hard_native_job.sh") in batch
                 and str(self.evaluation) in batch and str(self.root) in batch and "bash " in batch,
