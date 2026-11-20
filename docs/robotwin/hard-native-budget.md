@@ -4,6 +4,8 @@
 
 新协议为 `robotwin-native-b0-hard-native-budget-v1`。各任务上限从固定 RoboTwin 的 `task_config/_eval_step_limit.yml` 读取并与[任务目录](task-catalog.md)核对，范围 400–1,700 个有效动作锚点。最大模型查询次数为 `ceil(step_lim / 30)`；最后一个 chunk 的已发送命令和真正推进的动作分别记录。权重、观测、动作转换、指令、随机化配置和原生成功判定继续沿用固定版本。作者循环仅扩展外层查询次数。
 
+已部署执行提交为 `bcb1bcdd123e2b47d3b6c0a12c1f72e95931b460`，协议指纹为 `bdb780be0ade42b680b5f81f7dc5533b1cb8e6a8699697ca3ec5b7b7b507583c`。服务器真实资产和原 smoke 初态准备通过，7,000 回合计划、四份独立 pilot 清单与正式 0/7,000 汇总已核验，相关 CPU 单元检查通过。2026-11-20 16:48 接管成功，当前阶段为 `waiting_native_easy`；Hard GPU 短测尚未运行。
+
 CPU 准备阶段冻结完整 7,000 回合的计划。每项任务在 GPU 作业内完成原生专家预筛后，再冻结该项的完整初态与 policy seed；未冻结的计划数明确列为未完成。专家预筛异常和候选排除不计作策略失败。原评测面板作为预筛证据来源，新协议的 manifest、逐回合结果和视频保存在独立目录，不向旧 300 动作结果追加。
 
 执行顺序为：Easy 五任务 900 回合重评 → 原 Easy 累计 7,000 回合收尾 → Hard 双进程短测 → Hard 首批 5,000 → Hard 重点任务新增 2,000。CPU 接续控制器接管仍在运行的 Easy 作业 `20730`，使用它原来的 `15728f76ba267fef3bd75c36c7d825c4ab2a4360` 固定代码和输出；不会重启该 GPU 作业。只有两套 Easy 都通过完整性门槛后，才取消旧 300 动作 Hard 占位作业 `20326`，提交原生预算 Hard 作业。
@@ -23,10 +25,11 @@ Hard 短测使用 `move_stapler_pad`、`turn_switch` 各 5 个原 smoke 初态�
 本机查询使用实际已部署的 `<HardCommit>`。后续文档提交不改变作业代码；须显式指定原作业提交。
 
 ```powershell
+$hard = 'bcb1bcdd123e2b47d3b6c0a12c1f72e95931b460'
 ./tools/xvla/remote.ps1 robotwin-status
-./tools/xvla/remote.ps1 robotwin-report formal -HardNativeBudget -HardNativeBudgetCommit <HardCommit>
+./tools/xvla/remote.ps1 robotwin-report formal -HardNativeBudget -HardNativeBudgetCommit $hard
 # 仅在已确认旧 CPU 控制器结束、既有 adoption.json 和固定工作树保留时恢复。
-./tools/xvla/remote.ps1 robotwin-run 20298 -HardNativeBudget -HardNativeBudgetCommit <HardCommit> -RobotHours 48
+./tools/xvla/remote.ps1 robotwin-run 20298 -HardNativeBudget -HardNativeBudgetCommit $hard -RobotHours 48
 ```
 
 本轮 Hard 使用扩展动作预算，报告时须标注该口径。原 300 动作预算和本轮原生预算的成功率分别展示，不直接混合成一组结果。
