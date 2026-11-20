@@ -27,6 +27,8 @@ param(
     [switch]$ParallelEasy,
     [switch]$NativeBudget,
     [ValidatePattern('^[0-9a-f]{40}$')][string]$NativeBudgetCommit,
+    [switch]$HardNativeBudget,
+    [ValidatePattern('^[0-9a-f]{40}$')][string]$HardNativeBudgetCommit,
     [switch]$RootOnly,
     [ValidateSet('reference','expanded','stratified')][string]$ResetPool
 )
@@ -57,15 +59,29 @@ $sha=(& git -C $repoRoot rev-parse HEAD).Trim()
 $snapshot="$($settings.RunCodeRoot)/$sha"
 $robotSha=$sha
 if ($RobotCommit) { $robotSha=$RobotCommit }
-if ($NativeBudget -and -not $RobotCommit) { $robotSha='9baa17360abe242cb36e8f9c78f0aadbe64b3bee' }
+if ($NativeBudget -and $HardNativeBudget) { throw 'Choose Easy -NativeBudget or -HardNativeBudget' }
+if (($NativeBudget -or $HardNativeBudget) -and -not $RobotCommit) { $robotSha='9baa17360abe242cb36e8f9c78f0aadbe64b3bee' }
 $robotSnapshot="$($settings.RunCodeRoot)/$robotSha"
-$nativeSha=if ($NativeBudgetCommit) { $NativeBudgetCommit } else { $sha }
+$nativeSha=if ($NativeBudgetCommit) { $NativeBudgetCommit } elseif ($HardNativeBudget) { '15728f76ba267fef3bd75c36c7d825c4ab2a4360' } else { $sha }
 $nativeSnapshot="$($settings.RunCodeRoot)/$nativeSha"
 $nativeOutput="$robotData/native-budget/$nativeSha"
+$hardNativeSha=if ($HardNativeBudgetCommit) { $HardNativeBudgetCommit } else { $sha }
+$hardNativeSnapshot="$($settings.RunCodeRoot)/$hardNativeSha"
+$hardNativeOutput="$robotData/hard-native-budget/$hardNativeSha"
 switch ($Command) {
  'robotwin-run' {
   if ($Value -notmatch '^[0-9]+$') { throw 'Requires the CuRobo Slurm build job ID' }
-  if ($NativeBudget) {
+  if ($HardNativeBudget) {
+   Invoke-XRemote @"
+test -f '$hardNativeSnapshot/tools/xvla/robotwin/hard_native_dispatch.py'
+test -f '$hardNativeOutput/adoption.json'
+source '$robotSnapshot/tools/xvla/robotwin/runtime.env'
+'$robotPrefix/bin/python' '$hardNativeSnapshot/tools/xvla/robotwin/hard_native.py' --prepare-only --pinned-evaluation-root '$robotSnapshot' --source-panel '$robotData/panels/$robotSha' --output-root '$hardNativeOutput' --robotwin-root '$robotCode/RoboTwin-'"`$ROBOTWIN_REV" --xvla-root '$robotCode/X-VLA-'"`$XVLA_REV" --checkpoint '$robotData/models/X-VLA-RoboTwin2--'"`${MODEL_REV:0:12}"
+'$robotPrefix/bin/python' '$hardNativeSnapshot/tools/xvla/robotwin/hard_native_report.py' --input '$hardNativeOutput' --source-panel '$robotData/panels/$robotSha' --output '$hardNativeOutput/reports'
+nohup '$($settings.CondaRoot)/envs/vla_budget_rl/bin/python' -u '$hardNativeSnapshot/tools/xvla/robotwin/hard_native_dispatch.py' --evaluation-root '$robotSnapshot' --easy-native-root '$nativeOutput' --output-root '$hardNativeOutput' --build-job '$Value' --partition '$($settings.Partition)' --gpu '$GpuModel' --hours '$RobotHours' >> '$hardNativeOutput/dispatch.log' 2>&1 < /dev/null &
+echo ROBOTWIN_HARD_NATIVE_BUDGET_DISPATCH_PID=`$!
+"@
+  } elseif ($NativeBudget) {
    Invoke-XRemote @"
 test -f '$nativeSnapshot/tools/xvla/robotwin/native_budget_dispatch.py'
 source '$robotSnapshot/tools/xvla/robotwin/runtime.env'
@@ -99,7 +115,19 @@ bash '$robotSnapshot/tools/xvla/robotwin/submit.sh' '$Value' '$($settings.Partit
  }
  'robotwin-report' {
   if ($Value -notin @('smoke','formal')) { throw 'Requires smoke or formal' }
-  if ($NativeBudget) {
+  if ($HardNativeBudget) {
+   if ($Value -ne 'formal') { throw 'Hard native-budget evaluation uses the formal cohort' }
+   Invoke-XRemote @"
+'$robotPrefix/bin/python' - <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, '$hardNativeSnapshot/tools/xvla/robotwin')
+import hard_native_report
+report=hard_native_report.summarize(Path('$hardNativeOutput'),Path('$robotData/panels/$robotSha'))
+hard_native_report.emit_markdown(report,sys.stdout)
+PY
+"@
+  } elseif ($NativeBudget) {
    if ($Value -ne 'formal') { throw 'Native-budget reevaluation uses the formal cohort' }
    Invoke-XRemote @"
 '$robotPrefix/bin/python' - <<'PY'
@@ -166,6 +194,24 @@ for profile in sorted((Path(sys.argv[1])/'native-budget').glob('*/profile.json')
             first=task['batches']['1']
             rate=first['success_rate']
             print(task['task_id'],str(first['finished'])+'/100,',first['successes'],'successes,',str(round(rate*100,2))+'%' if rate is not None else 'pending')
+    log=root/'dispatch.log'
+    if log.is_file():
+        print('\n'.join(log.read_text().splitlines()[-2:]))
+for profile in sorted((Path(sys.argv[1])/'hard-native-budget').glob('*/profile.json'),key=lambda path:path.stat().st_mtime):
+    root=profile.parent
+    state=json.loads((root/'state.json').read_text()) if (root/'state.json').is_file() else {}
+    print('--- hard-native-budget',root.name,'stage',state.get('stage','prepared'))
+    if state.get('superseded_by'):
+        print('superseded by',state['superseded_by'])
+        continue
+    report=root/'reports/summary.json'
+    if report.is_file():
+        total=json.loads(report.read_text())['overall']['cumulative']
+        print('native-budget Hard',str(total['finished'])+'/'+str(total['planned']),'completed,',total['unresolved'],'unresolved,',total['not_frozen'],'not frozen')
+    pilot=root/'pilot/qualification.json'
+    if pilot.is_file():
+        qualification=json.loads(pilot.read_text())
+        print('Hard parallel qualification',qualification.get('qualified'),qualification.get('reason'))
     log=root/'dispatch.log'
     if log.is_file():
         print('\n'.join(log.read_text().splitlines()[-2:]))

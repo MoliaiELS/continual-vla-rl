@@ -35,6 +35,18 @@ if [[ -n "$evaluation_root" ]]; then
     git -C "$tool_dir" diff --quiet HEAD -- submit.sh job.sh panel.py prescreen_recovery.py prescreen_failures.py
 fi
 source "$evaluation_tools/runtime.env"
+comment=()
+submission_token="${FYP_ROBOTWIN_SUBMISSION_TOKEN:-}"
+if [[ -n "$submission_token" ]]; then
+    if [[ ! "$submission_token" =~ ^rw-hard-easy-[0-9a-f]{24}$ || "$mode" != extension || "$lane" != easy ||
+          "$gpu" != 4090 || "$eval_workers" != 2 || "$evaluation_commit" != 9baa17360abe242cb36e8f9c78f0aadbe64b3bee ]]; then
+        echo 'Submission token requires the fixed Hard-controller Easy extension' >&2
+        exit 1
+    fi
+    git -C "$tool_dir" ls-files --error-unmatch hard_native_dispatch.py >/dev/null
+    git -C "$tool_dir" diff --quiet HEAD -- hard_native_dispatch.py submit.sh
+    comment=("--comment=$submission_token")
+fi
 data="$FYP_ROBOTWIN_DATA"
 mkdir -p "$data/logs" "$data/evidence"
 exec 9> "$data/submit.lock"
@@ -69,7 +81,7 @@ printf -v launch '%q ' bash "$tool_dir/job.sh" "${job_args[@]}"
 jobid="$(sbatch --parsable --partition="$partition" --exclude=4090node1 --nodes=1 --ntasks=1 \
     --cpus-per-task="$cpus" --time="$((10#$hours * 60))" "${gres[@]}" \
     --job-name="rw-b0-$mode-$lane" --output="$data/logs/%j.out" --error="$data/logs/%j.err" \
-    --export=ALL --wrap="$launch")"
+    --export=ALL "${comment[@]}" --wrap="$launch")"
 if [[ -n "$evaluation_root" ]]; then
     printf '%s\t%s\t%s\n' "${jobid%%;*}" "$evaluation_commit" "$orchestration_commit" >> "$data/evidence/prescreen-recovery-jobs.tsv"
 fi

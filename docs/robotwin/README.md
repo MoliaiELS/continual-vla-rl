@@ -4,6 +4,8 @@
 
 [任务目录](task-catalog.md)按官方 50 项清单列出任务内容、分类、成功判定和覆盖状态。[执行登记](status.md)记录真实作业和进度。[X‑VLA 作者的公开参考](https://github.com/2toinf/X-VLA/blob/6c4ecfb8be458ae7c0c96094e4b0add4174f4fe2/evaluation/robotwin-2.0/README.md)是 Easy 70.0%、Hard 39.0%，逐项参考见[论文附录 M 表 16](https://arxiv.org/html/2510.10274v1#A13.T16)。这些不是本地实测。
 
+2026-11-20 用户确认 Hard 全部 50 项按各自原生动作上限评测，详见 [Hard 原生预算与自动接续](hard-native-budget.md)。当前 Easy 作业继续运行；Easy 五任务重评和原定扩测完成后，接续新的 Hard 协议。下文 10 次查询／300 动作的定义保留为原评测记录，恢复当前流程应使用新文档的 `-HardNativeBudget` 入口。
+
 ## 固定身份和实验定义
 
 | 项目 | 版本或规则 |
