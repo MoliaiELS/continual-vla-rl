@@ -63,6 +63,7 @@ def duration_seconds(value):
 class RecoveryDispatch:
     def __init__(self, cfg):
         self.cfg = cfg
+        self.prefix50 = getattr(cfg, "prefix50", False)
         self.data = Path(os.environ["FYP_ROBOTWIN_DATA"]).resolve(strict=True)
         self.evaluation = cfg.evaluation_root.resolve(strict=True)
         self.worker = cfg.worker_root.resolve(strict=True)
@@ -80,6 +81,8 @@ class RecoveryDispatch:
         self.code = output("git", "-C", str(HERE), "rev-parse", "HEAD")
         output("git", "-C", str(HERE), "ls-files", "--error-unmatch", "hard_recovery_dispatch.py",
                "hard_recovery_job.sh", "hard_recovery_panel.py", "hard_screen_recovery.py")
+        if self.prefix50:
+            output("git", "-C", str(HERE), "ls-files", "--error-unmatch", "hard_prefix_eval.py", "prefix50_report.py")
         output("git", "-C", str(HERE), "diff", "--exit-code", "HEAD", "--", ".")
         self.root = self.data / "recovery-dispatch" / self.code
         self.root.mkdir(parents=True, exist_ok=True)
@@ -98,6 +101,8 @@ class RecoveryDispatch:
         configuration = dict(evaluation_root=str(self.evaluation), worker_root=str(self.worker),
                              output_root=str(self.profile), adopt_job=cfg.adopt_job, partition=cfg.partition,
                              hours=cfg.hours, environment=environment)
+        if self.prefix50:
+            configuration["episodes_per_task"] = 50
         self.state = json.loads(self.path.read_bytes()) if self.path.is_file() else {
             "configuration": configuration, "orchestration_commit": self.code,
             "profile_fingerprint": profile["protocol_fingerprint"], "profile_sha256": sha256(raw),
@@ -120,7 +125,10 @@ class RecoveryDispatch:
         return (matches[0][1].split()[0].rstrip("+"), matches[0][2]) if matches else ("UNKNOWN", None)
 
     def command(self):
-        return ["bash", str(HERE / "hard_recovery_job.sh"), str(self.evaluation), str(self.worker), str(self.profile)]
+        command = ["bash", str(HERE / "hard_recovery_job.sh"), str(self.evaluation), str(self.worker), str(self.profile)]
+        if self.prefix50:
+            command.append("--prefix50")
+        return command
 
     def validate_job(self, job, fields, batch, token=None):
         require(fields.get("JobId") == job and fields.get("UserId", "").endswith(f"({os.getuid()})"),
@@ -262,19 +270,24 @@ class RecoveryDispatch:
                 "Frozen Hard profile changed before completion verification")
         target = self.root / "reports"
         target.mkdir(exist_ok=True)
-        command = [sys.executable, str(self.worker / "tools/xvla/robotwin/hard_native_report.py"),
-                   "--input", str(self.profile), "--source-panel", str(self.data / "panels" / EVALUATION),
-                   "--output", str(target)]
+        if self.prefix50:
+            command = [sys.executable, str(HERE / "prefix50_report.py"), "--evaluation-root", str(self.evaluation),
+                       "--worker-root", str(self.worker)]
+        else:
+            command = [sys.executable, str(self.worker / "tools/xvla/robotwin/hard_native_report.py")]
+        command.extend(["--input", str(self.profile), "--source-panel", str(self.data / "panels" / EVALUATION),
+                        "--output", str(target)])
         with (target / "stdout.log").open("ab") as stdout, (target / "stderr.log").open("ab") as stderr:
             code = subprocess.run(command, cwd=self.evaluation, env=dict(os.environ, PYTHONPATH=str(self.evaluation)),
                                   stdout=stdout, stderr=stderr).returncode
         require(code == 0, f"Frozen Hard reporter failed ({code}); inspect {target / 'stderr.log'}")
         report = json.loads((target / "summary.json").read_bytes())
-        total = report["overall"]["cumulative"]
+        total = report["overall"]["hard" if self.prefix50 else "cumulative"]
+        planned = 2500 if self.prefix50 else 7000
         require(report.get("protocol_fingerprint") == self.state["profile_fingerprint"]
-                and report.get("status") == "complete" and total["planned"] == total["finished"] == 7000
+                and total["status"] == "complete" and total["planned"] == total["finished"] == planned
                 and total["unresolved"] == total["retry_pending"] == 0,
-                f"Hard recovery finished without a complete verified 7,000-episode report: {total}")
+                f"Hard recovery finished without a verified {planned}-episode report: {total}")
         self.save("complete", report=str(target / "summary.json"), counts=total)
 
     def run(self):
@@ -312,6 +325,7 @@ def main():
     parser.add_argument("--adopt-job", required=True)
     parser.add_argument("--hours", type=int, choices=range(1, 73), default=48)
     parser.add_argument("--partition", default="GPU")
+    parser.add_argument("--prefix50", action="store_true")
     cfg = parser.parse_args()
     import fcntl
 

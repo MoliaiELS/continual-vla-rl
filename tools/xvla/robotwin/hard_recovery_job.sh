@@ -43,5 +43,9 @@ python -u tools/xvla/resource_monitor.py &
 monitor_pid=$!
 trap 'kill -TERM "$monitor_pid" 2>/dev/null || true; wait "$monitor_pid" || true' EXIT
 args=(--evaluation-root "$evaluation_root" --worker-root "$worker_root" --output-root "$profile")
-if [[ -n "${4:-}" ]]; then args+=(--boundary-file "$4"); fi
+case "${4:-}" in
+    --prefix50) args+=(--prefix50) ;;
+    '') ;;
+    *) args+=(--boundary-file "$4") ;;
+esac
 python -u "$tool_dir/hard_recovery_panel.py" "${args[@]}"
