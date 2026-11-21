@@ -14,6 +14,30 @@ Hard 原作业 `20975` 的 17 项任务在专家预筛期间遇到同一 `Sapien
 
 独立 CPU 控制器跟踪 Slurm 状态，对超时、节点故障和抢占最多自动续跑八次。未知技术失败停止自动重试并保留 attention 状态；只有冻结报告确认 Hard 7,000 回合全部完成且 unresolved、retry_pending 均为零，才记录完成。控制器的状态、作业身份回执及日志位于上述 `recovery-dispatch/<提交>/`，不改写旧控制器记录。
 
+控制器初始 PID 为 `1565393`，当前状态 `running`。查询当前队列和监控日志：
+
+```powershell
+ssh idac_sever "squeue -u yguo704 -o '%i|%j|%T|%M|%b|%R'"
+ssh idac_sever "tail -n 15 /mnt/slurmfs-4090node3/user_data/yguo704/RLinf/xvla/robotwin-b0/recovery-dispatch/e15b390c23de975ebeabd88780f2322853997055/dispatch.log"
+```
+
+若仅 CPU 监控进程退出，先确认旧进程已结束，再在服务器保留原环境变量和固定入口恢复；`--adopt-job` 始终使用初始接管编号 `21038`，后续作业历史由 ledger 续读，不重新提交同一个 token：
+
+```bash
+homes=/mnt/slurmfs-4090node1/homes/yguo704
+export FYP_CONDA_ROOT="$homes/miniforge3"
+export FYP_ROBOTWIN_DATA=/mnt/slurmfs-4090node3/user_data/yguo704/RLinf/xvla/robotwin-b0
+export FYP_ROBOTWIN_ENV="$FYP_CONDA_ROOT/envs/xvla_robotwin_b0"
+export FYP_ROBOTWIN_CODE="$homes/RLinf-RobotwinB0"
+fixed="$homes/RLinf-runs/e15b390c23de975ebeabd88780f2322853997055"
+ledger="$FYP_ROBOTWIN_DATA/recovery-dispatch/e15b390c23de975ebeabd88780f2322853997055"
+nohup "$FYP_CONDA_ROOT/envs/vla_budget_rl/bin/python" -u "$fixed/tools/xvla/robotwin/hard_recovery_dispatch.py" \
+  --evaluation-root "$homes/RLinf-runs/9baa17360abe242cb36e8f9c78f0aadbe64b3bee" \
+  --worker-root "$homes/RLinf-runs/bcb1bcdd123e2b47d3b6c0a12c1f72e95931b460" \
+  --output-root "$FYP_ROBOTWIN_DATA/hard-native-budget/bcb1bcdd123e2b47d3b6c0a12c1f72e95931b460" \
+  --adopt-job 21038 --hours 48 --partition GPU >> "$ledger/dispatch.log" 2>&1 < /dev/null &
+```
+
 ## 扩测的内容和目的
 
 动作预算扩展和样本扩测是两件事。当前 Hard 的动作预算按每项原生上限固定为 400–1,700；样本扩测则在相同预算、模型和成功判定下增加不同初态。
